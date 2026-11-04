@@ -1,16 +1,15 @@
 // A real claim: new member account, wearable request, attestation, TEE completion, signature, on-chain claim.
 // Loaded only when keys exist, so the read-only app needs no npm install.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { accountWith, call, hasDevAccount, KeyPair, loadDevAccount, mustCall, NEAR, privateKeyToAccount, sleep, waitForAccount } from "../chain/near.mjs";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { buildExplanationRequest, decide, parseResult } from "../tee/claim.mjs";
 import { createNearAi } from "../tee/near-ai.mjs";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
-import { createWearableServer } from "../wearable/server.mjs";
+import { buildClaim } from "../wearable/server.mjs";
 
 // 0.07 NEAR. A claim with 50 Tgas needs about 0.051 NEAR up front, and the account also pays for its storage.
 const MEMBER_DEPOSIT = (NEAR * 7n) / 100n;
-const WEARABLE_API_KEY = "demo-key";
 const CLAIM_READ_ATTEMPTS = 15;
 const CLAIM_READ_DELAY_MS = 1000;
 const idOf = Object.fromEntries(Object.entries(MEMBERS).map(([id, member]) => [member.name, id]));
@@ -19,7 +18,7 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 export async function createLive({ pool, model }) {
   const apiKey = process.env.NEARAI_CLOUD_API_KEY;
   if (!apiKey) throw new Error("NEARAI_CLOUD_API_KEY is not set");
-  if (!hasDevAccount()) throw new Error("chain/.env.testnet does not exist");
+  if (!hasDevAccount()) throw new Error("No dev account: chain/.env.testnet does not exist");
 
   const { accountId: rootId, nearKey, wearableKey } = loadDevAccount();
   const keyPair = KeyPair.fromString(nearKey);
@@ -31,23 +30,13 @@ export async function createLive({ pool, model }) {
   const wearableSigner = privateKeyToAccount(wearableKey);
   const nearAi = createNearAi({ apiKey, model });
 
-  // The wearable service runs here for the demo, and it keeps the only copy of its key in this process.
-  const wearable = createWearableServer({
-    apiKey: WEARABLE_API_KEY,
-    claims: { model, contract: pool, signMessage: (message) => wearableSigner.signMessage({ message }) },
-  });
-  await new Promise((resolve) => wearable.listen(0, "127.0.0.1", resolve));
-  wearable.unref();
-  const wearableBase = `http://127.0.0.1:${wearable.address().port}`;
+  // The wearable service runs in this process for the demo, because the host does not let a function open a local server.
+  const claims = { model, contract: pool, signMessage: (message) => wearableSigner.signMessage({ message }) };
 
   async function requestClaim(name, nearAccount) {
-    const res = await fetch(`${wearableBase}/mock/claims`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Open-Wearables-API-Key": WEARABLE_API_KEY },
-      body: JSON.stringify({ user_id: idOf[name], near_account: nearAccount, week: CLAIM_WEEK.start }),
-    });
-    if (!res.ok) throw new Error(`wearable service: HTTP ${res.status}`);
-    return res.json();
+    const [status, body] = await buildClaim(claims, { user_id: idOf[name], near_account: nearAccount, week: CLAIM_WEEK.start });
+    if (status !== 200) throw new Error(`wearable service: ${body.detail}`);
+    return body;
   }
 
   // Views read final state, which comes some seconds after the transaction. Without this wait, the screens show "No claim".
@@ -61,7 +50,8 @@ export async function createLive({ pool, model }) {
 
   // Calls onStep for each finished step. Returns what the state file keeps. Throws if any check fails.
   async function runClaim(name, onStep) {
-    const stamp = Date.now().toString(36);
+    // Two claims can start in the same millisecond on the host.
+    const stamp = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
     const memberId = `${name.toLowerCase()}-${stamp}.${rootId}`;
 
     // The attestation passes first, or this throws before member data goes to the model.

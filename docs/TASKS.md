@@ -138,10 +138,26 @@ From [the layout record](decisions/2026-11-04-screen-layout.md): "The member see
 The owner said: "let's use vercel anyways".
 
 - [x] A public URL shows the last real results from the chain.
-- [x] The hosted copy has no keys and does not load the live code. Claim and held requests get a 403.
+- [x] With no keys, the hosted copy does not load the live code. Claim and held requests get a 403.
 - [x] `.vercelignore` is an allow-list, so no key file can be uploaded. A test checks the list.
 - [x] `web/members.json` equals the synthetic source. A test checks this. To change the synthetic weeks, write this file again.
 - [ ] After a new live run changes `web/state.json`, deploy again with `vercel deploy --prod`, so that the hosted copy names the new accounts.
+
+## 9e2. Live claims on the hosted copy
+
+From [the record](decisions/2026-11-04-hosted-live-claims.md): "Anyone with the link can run a live claim, up to a claim cap. There is no code."
+
+- [x] The Intel quote module runs in a Vercel function, and a real quote gives `UpToDate`. A root `package.json` is necessary: installs in `chain/` and `tee/` do not reach the function.
+- [x] The live path needs no local server. `web/live.mjs` builds the wearable request in its own process.
+- [x] The dev account loads from environment variables when the key file does not exist.
+- [x] The server refuses a claim at the cap. The count comes from `get_totals` on the chain. A test checks this.
+- [x] With a missing key or cap, the host gives the read-only view. A test checks this.
+- [x] A hosted claim returns its result to the page, and the shared state does not change. A test checks this. A real claim through the hosted handler on one machine gave A paid.
+- [x] Approve and Decline stay off on the host. Requests from another site get a 403. A test checks both.
+- [x] The upload list is still an allow-list, and it names no key file. A test checks this.
+- [ ] The owner sets the cap, and adds the keys with `node chain/add-hosted-keys.mjs <preview|production> <cap>`.
+- [ ] The pool holds enough tokens for the cap.
+- [ ] Real claims pass on a preview URL, and on the production URL.
 
 ## 9f. Release for the judges
 

@@ -31,6 +31,8 @@ const app = {
   run: null,
   runError: null,
   justRan: new Set(),
+  // Claims from this visit on the shared copy. The server does not keep them.
+  session: {},
   heldBusy: false,
   heldError: null,
   loadError: null,
@@ -88,6 +90,10 @@ async function loadAll() {
   app.status = status;
   app.insurer = insurer;
   NAMES.forEach((name, index) => (app.members[name] = members[index]));
+  for (const [name, { member, insurer_row: row }] of Object.entries(app.session)) {
+    app.members[name] = member;
+    app.insurer.members = app.insurer.members.map((m) => (m.member === name ? row : m));
+  }
   app.loadError = null;
 }
 
@@ -240,7 +246,7 @@ function insurerHtml(data, { arrive }) {
 }
 
 function stubHtml(m, index, data, arrive) {
-  const live = app.status.mode === "live";
+  const live = app.status.can_decide;
   const held = m.outcome === "Held";
   return `<article class="row ${arrive ? "arrive" : ""}" style="--i:${index}" aria-label="Claim from member ${esc(m.member)}">
     <div class="closed"><p class="lab">Health data stays with member ${esc(m.member)}</p></div>
@@ -261,6 +267,7 @@ function stubHtml(m, index, data, arrive) {
                   <button type="button" class="btn btn-primary btn-small" data-action="approve" data-member="${m.member}" ${live && !app.heldBusy ? "" : "disabled"}>${app.heldBusy ? "Sending" : "Approve and pay"}</button>
                   <button type="button" class="btn btn-secondary btn-small" data-action="reject" data-member="${m.member}" ${live && !app.heldBusy ? "" : "disabled"}>Decline</button>
                 </div>
+                ${app.status.held_reason ? `<p class="reason">${esc(app.status.held_reason)}</p>` : ""}
                 ${app.heldError ? `<p class="alert" role="alert">${esc(app.heldError)}</p>` : ""}
               </div>`
             : ""
@@ -412,6 +419,7 @@ async function runClaim() {
         if (steps) steps.innerHTML = stepsHtml();
       }
       if (event.type === "error") throw new Error(event.message);
+      if (event.type === "done" && event.session) app.session[name] = event.session;
     });
     await loadAll();
     app.justRan.add(name);

@@ -1,4 +1,4 @@
-// The demo web app. Live claims run on one machine with keys. With no keys, it reads the last real results from the chain.
+// The demo web app. With keys, it runs live claims. With no keys, it reads the last real results from the chain.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -13,6 +13,8 @@ const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 const MEMBER_NAMES = ["A", "B", "C"];
 const MAX_BODY = 256;
+export const DEFAULT_MODEL = "Qwen/Qwen3.8-27B";
+export const HELD_REASON = "Approve and Decline are off on this shared copy, so the demo stays the same for each visitor.";
 
 const readState = () => JSON.parse(readFileSync(STATE_FILE, "utf8"));
 
@@ -25,7 +27,19 @@ async function readClaim(state, name) {
   return { name, stored, record, signerRegistered };
 }
 
-export async function createApp({ live = null, liveReason = "", members = null, state: getState = readState, saveState = null, read = readClaim, viewFn = view } = {}) {
+// `hosted` is the shared copy: claims stop at `claimCap`, results go back to the page only, and the shared state never changes.
+export async function createApp({
+  live = null,
+  liveReason = "",
+  hosted = false,
+  claimCap = null,
+  capReason = "",
+  members = null,
+  state: getState = readState,
+  saveState = null,
+  read = readClaim,
+  viewFn = view,
+} = {}) {
   const save = saveState ?? ((state) => writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`));
   const data = Object.fromEntries((members ?? (await loadMembers())).map((member) => [member.name, member]));
   let running = false;
@@ -47,17 +61,30 @@ export async function createApp({ live = null, liveReason = "", members = null, 
   // Only this page can start a claim. Another site in the same browser cannot.
   const sameSite = (req) => {
     const host = req.headers.host ?? "";
+    if (hosted) return req.headers.origin === `https://${host}`;
     if (!/^(localhost|127\.0\.0\.1):\d+$/.test(host)) return false;
     const { origin } = req.headers;
     return !origin || origin === `http://${host}`;
   };
 
-  const status = (state) => ({
-    mode: live ? "live" : "read_only",
-    reason: live ? null : liveReason,
-    pool: state.pool,
-    explorer: EXPLORER,
-  });
+  // The count comes from the chain, so it stays correct across restarts and across instances of the function.
+  const capReached = async (state) => {
+    if (!hosted) return false;
+    const { paid, not_paid: notPaid, held, rejected } = await viewFn(state.pool, "get_totals");
+    return paid + notPaid + held + rejected >= claimCap;
+  };
+
+  const status = async (state) => {
+    const off = !live ? liveReason : (await capReached(state)) ? capReason : null;
+    return {
+      mode: off ? "read_only" : "live",
+      reason: off,
+      can_decide: Boolean(live) && !hosted,
+      held_reason: hosted ? HELD_REASON : null,
+      pool: state.pool,
+      explorer: EXPLORER,
+    };
+  };
 
   const insurer = async (state) => {
     const [config, totals, claims] = await Promise.all([
@@ -78,22 +105,36 @@ export async function createApp({ live = null, liveReason = "", members = null, 
     });
   };
 
+  async function finishClaim(res, name, stored) {
+    const state = getState();
+    const shown = { ...state, members: { ...state.members, [name]: stored } };
+    if (!hosted) {
+      save(shown);
+      return { type: "done", member: name };
+    }
+    const [memberData, insurerData] = await Promise.all([member(shown, name), insurer(shown)]);
+    const insurerRow = insurerData.members.find((row) => row.member === name);
+    return { type: "done", member: name, session: { member: memberData, insurer_row: insurerRow } };
+  }
+
   async function runClaim(req, res, name) {
-    if (running) return send(res, 409, { detail: "A claim is running" });
+    if (running) return send(res, 409, { detail: "A claim is running. Try again in a minute." });
     running = true;
-    res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-    const write = (event) => res.write(`${JSON.stringify(event)}\n`);
     try {
-      const stored = await live.runClaim(name, (step, text) => write({ type: "step", step, text }));
-      const state = getState();
-      state.members[name] = stored;
-      save(state);
-      write({ type: "done", member: name });
-    } catch (error) {
-      write({ type: "error", message: String(error.message).slice(0, 400) });
+      if (await capReached(getState())) return send(res, 403, { detail: capReason });
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (event) => res.write(`${JSON.stringify(event)}\n`);
+      try {
+        const stored = await live.runClaim(name, (step, text) => write({ type: "step", step, text }));
+        write(await finishClaim(res, name, stored));
+      } catch (error) {
+        // A public page must not show text from a service. The log keeps it.
+        if (hosted) console.error("claim failed:", error);
+        write({ type: "error", message: hosted ? "The claim did not finish. Try again." : String(error.message).slice(0, 400) });
+      }
+      res.end();
     } finally {
       running = false;
-      res.end();
     }
   }
 
@@ -129,11 +170,12 @@ export async function createApp({ live = null, liveReason = "", members = null, 
         const match = pathname.match(/^\/api\/(claims|held)\/([ABC])$/);
         if (!match) return send(res, 404, { detail: "Not found" });
         if (!live) return send(res, 403, { detail: liveReason });
+        if (hosted && match[1] === "held") return send(res, 403, { detail: HELD_REASON });
         return match[1] === "claims" ? await runClaim(req, res, match[2]) : await resolve(req, res, match[2]);
       }
       if (req.method !== "GET") return send(res, 405, { detail: "Method not allowed" });
 
-      if (pathname === "/api/status") return send(res, 200, status(state));
+      if (pathname === "/api/status") return send(res, 200, await status(state));
       if (pathname === "/api/insurer") return send(res, 200, await insurer(state));
       const match = pathname.match(/^\/api\/members\/([ABC])$/);
       if (match) return send(res, 200, await member(state, match[1]));
@@ -159,7 +201,7 @@ async function loadLive(state) {
   } catch {
     // No .env file: read-only.
   }
-  const model = process.env.NEARAI_MODEL || "Qwen/Qwen3.8-27B";
+  const model = process.env.NEARAI_MODEL || DEFAULT_MODEL;
   try {
     const { createLive } = await import("./live.mjs");
     return { live: await createLive({ pool: state.pool, model }) };

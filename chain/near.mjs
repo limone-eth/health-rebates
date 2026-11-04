@@ -23,8 +23,13 @@ export async function createHelperAccount(accountId, keyPair) {
   if (!res.ok) throw new Error(`helper: HTTP ${res.status}`);
 }
 
-export const hasDevAccount = () => existsSync(KEY_FILE);
-export const loadDevAccount = () => JSON.parse(readFileSync(KEY_FILE, "utf8"));
+// The host has no key file, so it gets the same three values as environment variables.
+function devAccountFromEnv() {
+  const { DEV_ACCOUNT_ID: accountId, DEV_NEAR_KEY: nearKey, DEV_WEARABLE_KEY: wearableKey } = process.env;
+  return accountId && nearKey && wearableKey ? { accountId, nearKey, wearableKey } : null;
+}
+export const hasDevAccount = () => existsSync(KEY_FILE) || devAccountFromEnv() !== null;
+export const loadDevAccount = () => (existsSync(KEY_FILE) ? JSON.parse(readFileSync(KEY_FILE, "utf8")) : devAccountFromEnv());
 
 export async function createDevAccount() {
   const keyPair = KeyPair.fromRandom("ed25519");
