@@ -1,6 +1,6 @@
 # Day 1 spike: go or no-go
 
-**Result: GO. The contract code verifies a real NEAR AI Cloud signature, and the signer is in a quote with a valid Intel signature. Two checks are still open: the software in the TEE, and a run on testnet.**
+**Result: GO. The contract code verifies a real NEAR AI Cloud signature, and the signer is in a quote with a valid Intel signature. Two checks were open on day 1: the software in the TEE, and a run on testnet. See the updates in the table.**
 
 | Question | Answer | Evidence |
 |---|---|---|
@@ -12,8 +12,16 @@
 | Is the Intel signature on the quote valid? | Yes | `@phala/dcap-qvl-node`, the library in NEAR's reference verifier. Status `UpToDate` on both quotes. A quote with one changed byte fails. |
 | Is the TD in debug mode? | No | `td_attributes` bit 0 is clear on all quotes. The script stops if it is set. The script has not seen a debug quote. |
 | Is the attestation verified before the data goes to the model? | Yes | The script stops before the completion if a check fails. |
-| Which software runs in the TEE? | **Not checked** | The event log replay, the compose hash, image provenance and GPU evidence are not done. A genuine TDX machine holds the key, but we do not check its software. |
-| Does it work on testnet? | **Not checked** | No testnet account yet |
+| Which software runs in the TEE? | **Partly checked** (added on 4 Nov, `tee/software.mjs`) | The event log replays to RTMR3. The compose file matches the event log and MRCONFIGID. NVIDIA accepts the GPU evidence. We do not prove that the software is safe. See the limits below. |
+| Does it work on testnet? | Yes (added later) | See [testnet-run.md](testnet-run.md) |
+
+## Limits of the software check
+
+- We have no trusted list. The script reads the image names from the compose file, but it compares them with nothing.
+- The compose file starts a compose manager, and the manager starts the model containers later. The model report has a separate manager log and quote. We do not check them.
+- The compose file reads the manager image from `${COMPOSE_MANAGER_IMAGE:-...}`, so an environment value can change it. We do not check that value.
+- We do not check where the images come from (image provenance), and we do not rebuild them.
+- We trust the HTTPS connection for NVIDIA's answer. We do not check the signature on its token.
 
 ## Model choice
 

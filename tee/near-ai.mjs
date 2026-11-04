@@ -1,9 +1,10 @@
 // NEAR AI Cloud client: attestation first, then completion, then response signature.
 // Same checks as spike/verify-completion.mjs. Follows https://docs.near.ai/cloud/verification.
-// It does not check the event log, the compose hash, image provenance or GPU evidence.
+// It checks the event log, the compose hash and the GPU evidence. It does not check image provenance.
 import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { recoverMessageAddress } from "viem";
+import { checkGpu, checkSoftware } from "./software.mjs";
 
 const { js_get_collateral: getCollateral, js_verify: verifyQuote } = createRequire(import.meta.url)(
   "@phala/dcap-qvl-node",
@@ -34,6 +35,7 @@ async function verifyReport(report, nonce) {
     throw new Error("Echoed report data does not match the quote");
   }
   if (report.signing_algo !== SIGNING_ALGO) throw new Error(`Signing algorithm: ${report.signing_algo}`);
+  checkSoftware(report, verified.report.TD10);
 }
 
 export function createNearAi({ apiKey, model }) {
@@ -52,12 +54,14 @@ export function createNearAi({ apiKey, model }) {
     if (!gateway) throw new Error("No gateway report");
     if (reports.length === 0) throw new Error("No model reports");
     for (const report of [gateway, ...reports]) await verifyReport(report, nonce);
+    await Promise.all(reports.map((report) => checkGpu(report, nonce)));
     return reports.map((report) => report.signing_address);
   }
 
   // Hashes the exact bytes. Do not parse and serialize again.
+  // Takes an object, or a string that holds the exact bytes from the wearable service.
   async function complete(request) {
-    const requestBody = Buffer.from(JSON.stringify(request));
+    const requestBody = Buffer.from(typeof request === "string" ? request : JSON.stringify(request));
     const res = await fetch(`${BASE}/chat/completions`, {
       method: "POST",
       headers: { ...auth, ...noAlias, "Content-Type": "application/json", "Accept-Encoding": "identity" },

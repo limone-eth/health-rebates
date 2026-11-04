@@ -2,8 +2,8 @@
 // The shapes follow the ActivitySummary and SleepSummary schemas of Open Wearables
 // (https://github.com/the-momentum/open-wearables, MIT).
 
-export const BASELINE_WEEK = { start: "2026-10-05", end: "2026-11-01" };
-export const CLAIM_WEEK = { start: "2026-11-02", end: "2026-11-08" };
+export const BASELINE_WEEK = { start: "2026-09-28", end: "2026-10-25" };
+export const CLAIM_WEEK = { start: "2026-10-26", end: "2026-11-01" };
 
 // Bedtime is in minutes after midnight of the day before the wake date (1440 = midnight).
 const OWNER_A = { sleepBpm: 54, rmssd: 62, bedtime: 1365, dayBpm: 68 };

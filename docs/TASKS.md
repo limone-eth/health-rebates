@@ -19,14 +19,14 @@ From: "Is the Intel signature on the quote valid? Not checked."
 - [x] The script verifies the quote with `@phala/dcap-qvl-node`.
 - [x] A changed quote fails the check.
 
-## 2b. Check which software runs in the TEE
+## 2b. Check which software runs in the TEE (done, with a limit)
 
 From: "A genuine TDX machine holds the key, but we do not check its software."
 
-- [ ] The script replays the event log against RTMR3.
-- [ ] The script checks the compose hash against MRCONFIGID.
-- [ ] The script checks the GPU evidence.
-- [ ] If this does not fit in the time, the README says so as a limit.
+- [x] The script replays the event log against RTMR3.
+- [x] The script checks the compose hash against MRCONFIGID.
+- [x] The script checks the GPU evidence with NVIDIA's service.
+- [x] The README states the limit: these checks do not prove that the images are safe.
 
 ## 3. Build the claim with two signatures (done)
 
@@ -65,6 +65,99 @@ From PLAN.md: "A, B, C give the expected results 5 times in a row".
 - [x] Each run verifies the attestation before it sends member data, and verifies each claim signature.
 - [x] The explanation is a separate completion, and it does not go on-chain.
 
-## 6. Remaining plan
+## 6. Wearable service signs only the request that it builds
 
-See the table in [PLAN.md](PLAN.md): contract, web app, README and video.
+From [decisions/2026-11-03-web-app-claims.md](decisions/2026-11-03-web-app-claims.md): "A click sends a real TEE claim to the deployed pool". A real claim needs this gap closed. See [tee-check.md](tee-check.md).
+
+- [x] The service builds the claim request from its own data and returns the request with its signature.
+- [x] The service has no route that signs a hash from the caller.
+- [x] Two calls for one member and week give the same request bytes.
+- [x] The TEE client sends these exact bytes, and the request hash matches them.
+
+## 7. Live claim on the deployed pool
+
+From the same record: "with a new member account".
+
+- [x] One action creates a new member account and sends a real claim to the deployed pool.
+- [x] The attestation passes before member data goes to the model.
+- [x] A top-up script moves free tokens from a new helper account to the dev account, and keeps no new key.
+- [x] A member account with the new deposit completes a claim on testnet.
+
+## 8. Read-only view with no keys
+
+From the same record: "With no keys, the app shows the last real results from the chain, and it says that they are from an earlier run."
+
+- [x] With no keys, the app starts and shows results that it reads from the chain.
+- [x] The screen says that the results are from an earlier run.
+- [x] With no keys, the live claim action is off, and the screen says why.
+
+## 9. Member screen, insurer screen, Verified panel
+
+From PLAN.md: "Two screens: the member sees their data and an explanation. The insurer sees the result, the proof, the payout and totals".
+
+From the record: "The insurer screen gets no health data."
+
+- [x] The member screen shows the week of data, the rule, the result and the explanation.
+- [x] The insurer screen shows the result, the proof, the payout and the totals.
+- [x] A test checks that the insurer API responses hold no health fields.
+- [x] The insurer can approve or reject C's held claim. Both are tested in the browser ([record](decisions/2026-11-04-restore-held-claim.md): "`web/state.json` must end with member C held").
+- [x] The Verified panel shows each check that passed, and says that the software in the TEE is not proven safe.
+
+## 9b. The brand look, with no brand name
+
+From [the record](decisions/2026-11-03-brand-look.md): the look only, and "instantiate design system in open pencil".
+
+- [x] OpenPencil holds the design system: colors, type, buttons, ticket.
+- [x] OpenPencil holds the member and insurer screens, and the owner reviewed them.
+- [x] `web/public/` uses the same tokens, with Switzer, Geist Mono and Doto.
+- [x] The repo shows no name, logo, character or photograph from that brand.
+- [x] Each view has one primary button and one Doto number.
+
+## 9c. Finish the approved screens
+
+From [the record](decisions/2026-11-03-screen-designs.md): "we can revisit tomorrow", and "Then I update the comps and continue with the docs and the PR."
+
+- [x] OpenPencil holds the approved copy.
+- [x] One live claim runs from the button in the browser, and each step shows.
+- [ ] The owner says what to revisit, or says that nothing needs a change.
+- [ ] The model's summary is shorter on new runs, if the owner wants this.
+
+## 9d. The wide ticket and the new titles
+
+From [the layout record](decisions/2026-11-04-screen-layout.md): "The member sees one landscape ticket, with a vertical tear". From [the titles record](decisions/2026-11-04-screen-titles.md): "The title stays the same for each member and each result."
+
+- [x] The member sees one landscape ticket, and the insurer sees one wide ticket for each member.
+- [x] First-view words have no "NEAR", "testnet" or token amount. Those stay in Technical details.
+- [x] Both screens show the chosen titles.
+- [x] The good-day line and the summary open from "Why this result".
+- [x] No sideways scroll at 1440, 1100 and 390 px.
+- [x] `docs/design/README.md` says that the app is now the screen reference. We did not update the screens in `rebates.op`: they still show the earlier layout.
+
+## 9e. Hosted read-only copy
+
+The owner said: "let's use vercel anyways".
+
+- [x] A public URL shows the last real results from the chain.
+- [x] The hosted copy has no keys and does not load the live code. Claim and held requests get a 403.
+- [x] `.vercelignore` is an allow-list, so no key file can be uploaded. A test checks the list.
+- [x] `web/members.json` equals the synthetic source. A test checks this. To change the synthetic weeks, write this file again.
+- [ ] After a new live run changes `web/state.json`, deploy again with `vercel deploy --prod`, so that the hosted copy names the new accounts.
+
+## 9f. Release for the judges
+
+From [the record](decisions/2026-11-04-release-for-judges.md): "I merge PRs 1 to 5 in order, then make the repo public."
+
+- [x] The repo names no other brand.
+- [ ] PRs 1 to 5 are merged into main.
+- [ ] The repo is public, and a clone of main passes the tests with no login.
+
+## 10. Remaining plan
+
+See the table in [PLAN.md](PLAN.md): README and video.
+
+- [x] A fresh clone passes the tests of the contract, the wearable service, the TEE check and the web app, and the web app starts with no keys. The web app reads results from the chain.
+- [x] [The video script](video-script.md) is written.
+- [x] The design review and the technical audit are done. Both found a skip link that left the screen, and the audit found a week table cut at some widths. These are fixed. Not tested: real screen readers, Safari, Firefox, touch devices.
+- [x] The claim week ended after the date on its results. It now runs from 26 Oct to 1 Nov 2026, and new live claims gave the same results: A paid, B not paid, C held.
+- [ ] The owner records the video.
+- [ ] The owner posts on X and sends the form.

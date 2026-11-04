@@ -1,0 +1,23 @@
+# An allow-list: only these files go to Vercel. No key file can be uploaded.
+*
+!vercel.json
+!api
+!api/index.mjs
+!web
+!web/package.json
+!web/server.mjs
+!web/views.mjs
+!web/state.json
+!web/members.json
+!web/public
+!web/public/**
+!chain
+!chain/view.mjs
+!tee
+!tee/claim.mjs
+!tee/members.mjs
+!wearable
+!wearable/package.json
+!wearable/data.mjs
+!wearable/rule.mjs
+!wearable/server.mjs

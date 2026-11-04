@@ -29,10 +29,10 @@ The first 8 use signatures from local test keys, with a test signer that the ins
 
 ## Limits
 
-- The script signs for the wearable service, and it signs the hash of the request that it built. A real service must hold that key, build the request itself and sign only that request. If not, a member can send many requests and claim with the best one.
+- This script signs for the wearable service, and it signs the hash of the request that it built. A member could then send many requests and claim with the best one. The web app's live claims do not have this gap: the wearable service builds the request and signs only that request. In the demo, one server holds the member, insurer and wearable keys.
 - The contract takes the last value of a duplicate JSON key. The TEE signs the body, so a member cannot add one.
 - The insurer registers a signer after the off-chain attestation passes. The contract does not check the attestation, and it trusts a registered signer until the insurer removes it.
-- The attestation does not check the software in the TEE. See task 2b.
+- The attestation does not prove that the software in the TEE is safe. See [the limits](spike-day-1.md#limits-of-the-software-check).
 - These paths are tested in the mock runtime only: the insurer approves or rejects a held claim, and the pool has too few funds.
 - If a transfer fails after a claim is recorded, the claim stays `Paid` and nothing pays again. The member is the caller, so the account exists, but no test covers this.
 - The transaction arguments are public. So each member's `days_met`, pattern result, model response and `request_hash` are public, under a pseudonymous account.
@@ -40,7 +40,7 @@ The first 8 use signatures from local test keys, with a test signer that the ins
 
 ## Run it
 
-Needs Rust, Node 20.6 or newer and an API key in `.env`. The first run creates a dev account from the testnet helper, and saves its key in `chain/.env.testnet`, which git ignores. Each run deploys a new pool and new members, which uses about 4.5 free testnet NEAR. The dev account now has less than one more run needs, so a further run needs more free tokens or a new dev account.
+Needs Rust, Node 20.6 or newer and an API key in `.env`. The first run creates a dev account from the testnet helper, and saves its key in `chain/.env.testnet`, which git ignores. Each run deploys a new pool and new members, which uses about 4.5 free testnet NEAR. The dev account now has less than one more run needs, so a further run needs more free tokens. `node chain/top-up.mjs` moves free tokens to the dev account, and it saves no new key.
 
 ```sh
 (cd contract && npx cargo-near@0.22.0 near build non-reproducible-wasm)

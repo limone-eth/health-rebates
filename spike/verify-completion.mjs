@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { recoverMessageAddress } from "viem";
+import { checkGpu, checkSoftware } from "../tee/software.mjs";
 
 const { js_get_collateral: getCollateral, js_verify: verifyQuote } = createRequire(import.meta.url)(
   "@phala/dcap-qvl-node",
@@ -45,7 +46,7 @@ const verifiedQuote = async (r) => {
   const collateral = await getCollateral(INTEL_PCCS, quote);
   const result = verifyQuote(quote, collateral, BigInt(Math.floor(Date.now() / 1000)));
   const { report_data: reportData, td_attributes: tdAttributes } = result.report.TD10;
-  return { status: result.status, reportData, tdAttributes };
+  return { status: result.status, reportData, tdAttributes, td: result.report.TD10 };
 };
 const expectedReportData = (r) => {
   const head = Buffer.alloc(32);
@@ -56,7 +57,7 @@ const expectedReportData = (r) => {
 const isDebug = (tdAttributes) => (Buffer.from(tdAttributes, "hex")[0] & 1) === 1;
 
 async function verifyReport(label, r) {
-  const { status, reportData, tdAttributes } = await verifiedQuote(r);
+  const { status, reportData, tdAttributes, td } = await verifiedQuote(r);
   const signed = QUOTE_OK.has(status);
   const production = !isDebug(tdAttributes);
   const bound = reportData === expectedReportData(r);
@@ -67,8 +68,28 @@ async function verifyReport(label, r) {
   check(`${label}: verified quote binds the signer and our nonce`, bound, r.signing_address);
   check(`${label}: echoed nonce matches`, echoed);
   check(`${label}: signing algorithm is ${SIGNING_ALGO}`, algo, r.signing_algo);
-  return signed && production && bound && echoed && algo;
+  let software = true;
+  try {
+    const { composeHash, images } = checkSoftware(r, td);
+    check(`${label}: event log replays to RTMR3, and the compose file matches it and MRCONFIGID`, true, composeHash);
+    console.log(`      compose file names: ${images.join(", ")}`);
+  } catch (error) {
+    software = false;
+    check(`${label}: event log and compose file`, false, error.message);
+  }
+  return signed && production && bound && echoed && algo && software;
 }
+
+const verifyGpu = async (label, r) => {
+  try {
+    const { gpus } = await checkGpu(r, nonce);
+    check(`${label}: NVIDIA accepted the GPU evidence`, true, `${gpus} GPUs`);
+    return true;
+  } catch (error) {
+    check(`${label}: GPU evidence`, false, error.message);
+    return false;
+  }
+};
 
 check("gateway report is present", Boolean(attestation.gateway_attestation));
 if (attestation.gateway_attestation) await verifyReport("gateway", attestation.gateway_attestation);
@@ -77,7 +98,8 @@ const modelReports = attestation.model_attestations ?? [];
 check("model reports are present", modelReports.length > 0, `${modelReports.length} reports`);
 const verifiedModelReports = [];
 for (const [i, r] of modelReports.entries()) {
-  if (await verifyReport(`model report ${i}`, r)) verifiedModelReports.push(r);
+  const label = `model report ${i}`;
+  if ((await verifyReport(label, r)) && (await verifyGpu(label, r))) verifiedModelReports.push(r);
 }
 if (failed) {
   console.log("\nRESULT: FAILED. No data was sent to the model.");
@@ -164,6 +186,6 @@ writeFileSync(
   ),
 );
 
-console.log("\nNOTE: this does not check the event log, the compose hash, image provenance or GPU evidence.");
+console.log("\nNOTE: this does not check that the images are safe, or what the compose manager starts later.");
 console.log(failed ? "\nRESULT: FAILED" : "\nRESULT: signature and bindings verified");
 process.exit(failed ? 1 : 0);

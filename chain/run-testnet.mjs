@@ -4,30 +4,25 @@
 // Each run deploys a new pool and new member accounts, because a member can claim a week one time.
 // This script does not print a key. It signs for the wearable service: a real service would hold that key itself.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { actions, Account, JsonRpcProvider, KeyPair, KeyPairSigner, teraToGas } from "near-api-js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { actions, KeyPair, teraToGas } from "near-api-js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { accountWith, call, createDevAccount, hasDevAccount, loadDevAccount, mustCall, NEAR, sleep, waitForAccount } from "./near.mjs";
+import { EXPLORER, view } from "./view.mjs";
 import { CLAIM_WEEK } from "../wearable/data.mjs";
 import { RULE } from "../wearable/rule.mjs";
 import { buildClaimRequest, decide, parseResult } from "../tee/claim.mjs";
 import { EXPECTED, loadMembers } from "../tee/members.mjs";
 import { createNearAi } from "../tee/near-ai.mjs";
 
-const RPC = process.env.NEAR_RPC_URL || "https://test.rpc.fastnear.com";
-const HELPER = "https://helper.testnet.near.org/account";
-const EXPLORER = "https://testnet.nearblocks.io/txns";
-const KEY_FILE = new URL("./.env.testnet", import.meta.url);
 const WASM = new URL("../contract/target/near/rebate_pool.wasm", import.meta.url);
 const MODEL = process.env.NEARAI_MODEL || "Qwen/Qwen3.8-27B";
 const WEEK = CLAIM_WEEK.start;
 const OTHER_WEEK = "2026-11-09";
-const NEAR = 10n ** 24n;
 const REBATE = NEAR / 10n; // 0.1 NEAR
 const RULE_TEXT = `${RULE.minSteps}+ steps with ${RULE.minRaisedHeartRateMinutes}+ raised heart rate minutes, and ${RULE.minSleepMinutes}+ sleep minutes, on ${RULE.minDays} of ${RULE.days} days`;
 
-const provider = new JsonRpcProvider({ url: RPC });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -35,77 +30,18 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 };
 
-async function loadOrCreateDevAccount() {
-  if (existsSync(KEY_FILE)) return JSON.parse(readFileSync(KEY_FILE, "utf8"));
-  const keyPair = KeyPair.fromRandom("ed25519");
-  const accountId = `rebates-demo-${Date.now().toString(36)}.testnet`;
-  const res = await fetch(HELPER, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ newAccountId: accountId, newAccountPublicKey: keyPair.getPublicKey().toString() }),
-  });
-  if (!res.ok) throw new Error(`helper: HTTP ${res.status}`);
-  const saved = { accountId, nearKey: keyPair.toString(), wearableKey: generatePrivateKey() };
-  writeFileSync(KEY_FILE, JSON.stringify(saved, null, 2), { mode: 0o600 });
+if (!hasDevAccount()) {
+  const { accountId } = await createDevAccount();
   console.log(`Created dev account ${accountId}. Its key is in chain/.env.testnet.`);
-  return saved;
 }
-
-const { accountId: rootId, nearKey, wearableKey } = await loadOrCreateDevAccount();
+const { accountId: rootId, nearKey, wearableKey } = loadDevAccount();
 const keyPair = KeyPair.fromString(nearKey);
-const accountFor = (id) => new Account(id, provider, new KeyPairSigner(keyPair));
+const accountFor = (id) => accountWith(id, keyPair);
 const root = accountFor(rootId);
 const wearable = privateKeyToAccount(wearableKey);
 
-for (let attempt = 0; attempt < 10; attempt++) {
-  try {
-    await root.getState();
-    break;
-  } catch (error) {
-    if (attempt === 9) throw error;
-    await sleep(2000);
-  }
-}
+await waitForAccount(root);
 console.log(`Dev account ${rootId}: ${Number((await root.getBalance()) / (NEAR / 1000n)) / 1000} NEAR`);
-
-async function view(contractId, method, args = {}) {
-  const res = await fetch(RPC, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: "view",
-      method: "query",
-      params: {
-        request_type: "call_function",
-        finality: "final",
-        account_id: contractId,
-        method_name: method,
-        args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
-      },
-    }),
-  });
-  const { result, error } = await res.json();
-  if (error || result?.error) throw new Error(`view ${method}: ${JSON.stringify(error ?? result.error)}`);
-  return JSON.parse(Buffer.from(result.result).toString());
-}
-
-// Returns the transaction hash and the failure text, if any. A failed call does not throw.
-async function call(account, contractId, method, args, deposit = 0n) {
-  const outcome = await account.signAndSendTransaction({
-    receiverId: contractId,
-    actions: [actions.functionCall(method, args, teraToGas(50), deposit)],
-    throwOnFailure: false,
-  });
-  const failure = outcome.status?.Failure ?? outcome.receipts_outcome?.find((r) => r.outcome.status?.Failure)?.outcome.status.Failure;
-  return { hash: outcome.transaction.hash, failure: failure ? JSON.stringify(failure) : null };
-}
-
-const mustCall = async (...args) => {
-  const result = await call(...args);
-  if (result.failure) throw new Error(`${args[2]} failed: ${result.failure}`);
-  return result;
-};
 
 // 1. Deploy a new pool and new members.
 const stamp = Date.now().toString(36);
@@ -195,6 +131,7 @@ console.log(`Attestation verified: ${attested.length} model signers.`);
 const registered = new Set();
 const OUTCOME = { paid: "Paid", "not paid": "NotPaid", "held for review": "Held" };
 const links = {};
+const webMembers = {};
 let firstClaim;
 
 for (const { name, baselineRows, claimRows } of memberData) {
@@ -225,6 +162,13 @@ for (const { name, baselineRows, claimRows } of memberData) {
   const before = await member.getBalance();
   const { hash, failure } = await call(member, poolId, "claim", args);
   links[name] = `${EXPLORER}/${hash}`;
+  webMembers[name] = {
+    account: member.accountId,
+    tx: hash,
+    signer: signature.signing_address,
+    recorded_on: new Date().toISOString().slice(0, 10),
+    explanation: null,
+  };
   check(`${name}: the claim transaction succeeds`, !failure, failure ?? `tx ${hash}`);
   await sleep(5000);
 
@@ -244,8 +188,14 @@ await expectRejected("a held claim resolved by a member", members.C, { member: m
 const totals = await view(poolId, "get_totals");
 check("totals on-chain", totals.paid === 1 && totals.not_paid === 1 && totals.held === 1, JSON.stringify(totals));
 
+// The web app reads this pool and these members.
+if (!failures) {
+  const stateFile = new URL("../web/state.json", import.meta.url);
+  writeFileSync(stateFile, `${JSON.stringify({ pool: poolId, week: WEEK, members: webMembers }, null, 2)}\n`);
+}
+
 console.log(`\nPool: ${poolId}`);
 for (const [name, link] of Object.entries(links)) console.log(`${name}: ${link}`);
-console.log("\nNOTE: this does not check the event log, the compose hash, image provenance or GPU evidence.");
+console.log("\nNOTE: this does not check that the images are safe, or what the compose manager starts later.");
 console.log(failures ? `\nRESULT: FAILED (${failures} failures)` : "\nRESULT: testnet payouts match A, B and C");
 process.exit(failures ? 1 : 0);

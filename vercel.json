@@ -1,0 +1,8 @@
+{
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "",
+  "outputDirectory": "web/public",
+  "rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }],
+  "functions": { "api/index.mjs": { "includeFiles": "web/{state,members}.json" } }
+}

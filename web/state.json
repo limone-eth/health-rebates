@@ -1,0 +1,27 @@
+{
+  "pool": "pool-mw1317o0.rebates-demo-mw12j3o6.testnet",
+  "week": "2026-10-26",
+  "members": {
+    "A": {
+      "account": "a-mw20q4bp.rebates-demo-mw12j3o6.testnet",
+      "tx": "DqBQTG9YU2w8UYMGkK9tE4DKPvpyHVj1rrwADUkcXwp8",
+      "signer": "0x835ab53d20294ef795906dff21ae4c045336aa26",
+      "recorded_on": "2026-11-04",
+      "explanation": "You met the health goals on 6 out of 7 days, which qualifies you for the weekly rebate. Your activity pattern matches your usual routine, so no further review is needed. Please note that the insurer does not see your specific health data."
+    },
+    "B": {
+      "account": "b-mw20l4yi.rebates-demo-mw12j3o6.testnet",
+      "tx": "7dTFQtbhgbsyhDNbS2F54bJwhBvrpbaKy4yeFhMzZBXD",
+      "signer": "0x835ab53d20294ef795906dff21ae4c045336aa26",
+      "recorded_on": "2026-11-04",
+      "explanation": "You met the health goals on 3 of the 7 days, which is fewer than the 5 days needed for a rebate. Your activity pattern looks consistent with your usual habits, so no further review is required. The insurer does not see your specific health data."
+    },
+    "C": {
+      "account": "c-mw20ldtt.rebates-demo-mw12j3o6.testnet",
+      "tx": "H7WRi2AMGTX1JUt9jR9HZuhJRQsrAk3hMmuxx2jd7G7p",
+      "signer": "0x835ab53d20294ef795906dff21ae4c045336aa26",
+      "recorded_on": "2026-11-04",
+      "explanation": "You met the health goals on 6 out of 7 days this week. However, this week looks different from your usual pattern, so a person will review it before processing. Please note that the insurer does not see this specific data."
+    }
+  }
+}

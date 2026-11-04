@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Good Week</title>
+  <meta name="description" content="An insurer pays a rebate for a healthy week and never sees the member's health data. Demo data and test money.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F2EEE8'/%3E%3Cpath d='M4 16h4m4 0h4m4 0h4m4 0h4' stroke='%23C65A2E' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://api.fontshare.com">
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=switzer@200,300,400&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@600&family=Geist+Mono:wght@400&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the result</a>
+  <header class="top">
+    <p class="lab brand">Good Week</p>
+    <nav class="seg" id="views" aria-label="Whose view">
+      <span class="lens" aria-hidden="true"></span>
+      <a href="#member" data-view="member">Member</a>
+      <a href="#insurer" data-view="insurer">Insurer</a>
+    </nav>
+    <p class="lab note">Demo data · Test money</p>
+  </header>
+  <main id="main" tabindex="-1"></main>
+  <p class="sr-only" id="announce" role="status"></p>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -41,6 +41,6 @@ for (let run = 1; run <= RUNS; run++) {
   }
 }
 
-console.log("\nNOTE: this does not check the event log, the compose hash, image provenance or GPU evidence.");
+console.log("\nNOTE: this does not check that the images are safe, or what the compose manager starts later.");
 console.log(failures ? `\nRESULT: FAILED (${failures} failures)` : `\nRESULT: all ${RUNS} runs gave the expected results`);
 process.exit(failures ? 1 : 0);
