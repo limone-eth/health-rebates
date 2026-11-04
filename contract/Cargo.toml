@@ -1,0 +1,17 @@
+[package]
+name = "rebate-pool"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# env::ecrecover is behind the `unstable` feature in near-sdk.
+near-sdk = { version = "5", features = ["unstable"] }
+
+[dev-dependencies]
+near-sdk = { version = "5", features = ["unstable", "unit-testing"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"

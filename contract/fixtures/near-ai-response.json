@@ -1,0 +1,7 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "request_hash": "db6b19c9364a8ba019f0a69f396c0fc754f3bb18e42f9bc2c906d5bb92d7baf9",
+  "response_body": "{\"id\":\"2d3e3e726b374ff68ec8c459233517af\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\n  \\\"days_met\\\": 5\\n}\"},\"finish_reason\":\"stop\",\"logprobs\":null,\"matched_stop\":248046}],\"model\":\"Qwen/Qwen3.8-27B\",\"created\":1793729212,\"usage\":{\"prompt_tokens\":30,\"total_tokens\":42,\"completion_tokens\":12,\"prompt_tokens_details\":null,\"reasoning_tokens\":0,\"completion_tokens_details\":{\"reasoning_tokens\":0}}}",
+  "signature": "0x213999e58c93aae5fd9ad5737960a9e27d3fc8072d3571e0530884c541c3ba5671e48ad32a3dc18d563089d7760a4593cfa9226ba15964ae7e3afd0e67100f7c1b",
+  "signing_address": "0x835ab53d20294ef795906dff21ae4c045336aa26"
+}

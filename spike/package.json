@@ -1,0 +1,12 @@
+{
+  "name": "spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verify": "node --env-file=../.env verify-completion.mjs"
+  },
+  "dependencies": {
+    "@phala/dcap-qvl-node": "0.3.3",
+    "viem": "2.21.0"
+  }
+}
