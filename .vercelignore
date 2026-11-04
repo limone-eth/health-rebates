@@ -1,21 +1,27 @@
 # An allow-list: only these files go to Vercel. No key file can be uploaded.
 *
 !vercel.json
+!package.json
+!package-lock.json
 !api
 !api/index.mjs
 !web
 !web/package.json
 !web/server.mjs
 !web/views.mjs
+!web/live.mjs
 !web/state.json
 !web/members.json
 !web/public
 !web/public/**
 !chain
 !chain/view.mjs
+!chain/near.mjs
 !tee
 !tee/claim.mjs
 !tee/members.mjs
+!tee/near-ai.mjs
+!tee/software.mjs
 !wearable
 !wearable/package.json
 !wearable/data.mjs

@@ -1,0 +1,11 @@
+{
+  "name": "health-rebates-hosted",
+  "private": true,
+  "type": "module",
+  "description": "Packages for the hosted function only. A test keeps these versions equal to chain/ and tee/.",
+  "dependencies": {
+    "@phala/dcap-qvl-node": "0.3.3",
+    "near-api-js": "7.4.0",
+    "viem": "2.21.0"
+  }
+}

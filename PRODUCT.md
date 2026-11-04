@@ -54,7 +54,7 @@ web
 
 ## Stack
 
-A Node server with no framework, and plain HTML, CSS and JavaScript with no build step. Live claims run on one machine with keys. A read-only copy with no keys runs on Vercel, as the owner asked. It is deployed from the CLI, and `.vercelignore` is an allow-list of the files that it can upload.
+A Node server with no framework, and plain HTML, CSS and JavaScript with no build step. Live claims run on one machine with keys, or on the hosted copy on Vercel, up to a claim cap. With no keys, the hosted copy is read-only. It is deployed from the CLI, and `.vercelignore` is an allow-list of the files that it can upload.
 
 ## Accessibility & Inclusion
 

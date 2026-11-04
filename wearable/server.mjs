@@ -17,7 +17,18 @@ const rowsFor = (userId, { start, end }) =>
 
 // Reads the caller's fields, and uses no hash, request or model from them.
 // The caller's API key stands in for a member login. A real service must link one NEAR account to each member.
-async function createClaim(req, { model, contract, signMessage }) {
+export async function buildClaim({ model, contract, signMessage }, { user_id: userId, near_account: nearAccount, week } = {}) {
+  if (!hasMember(userId)) return [404, { detail: "User not found" }];
+  if (week !== CLAIM_WEEK.start) return [422, { detail: "Only the current claim week can be claimed" }];
+  if (typeof nearAccount !== "string" || !NEAR_ACCOUNT.test(nearAccount)) return [422, { detail: "Bad near_account" }];
+
+  const requestBody = JSON.stringify(buildClaimRequest(model, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK)));
+  const requestHash = createHash("sha256").update(requestBody).digest("hex");
+  const signature = await signMessage(`rebate-claim:${contract}:${nearAccount}:${week}:${requestHash}`);
+  return [200, { request_body: requestBody, request_hash: requestHash, wearable_signature: signature }];
+}
+
+async function createClaim(req, claims) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -31,15 +42,7 @@ async function createClaim(req, { model, contract, signMessage }) {
   } catch {
     return [400, { detail: "Body is not JSON" }];
   }
-  const { user_id: userId, near_account: nearAccount, week } = body ?? {};
-  if (!hasMember(userId)) return [404, { detail: "User not found" }];
-  if (week !== CLAIM_WEEK.start) return [422, { detail: "Only the current claim week can be claimed" }];
-  if (typeof nearAccount !== "string" || !NEAR_ACCOUNT.test(nearAccount)) return [422, { detail: "Bad near_account" }];
-
-  const requestBody = JSON.stringify(buildClaimRequest(model, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK)));
-  const requestHash = createHash("sha256").update(requestBody).digest("hex");
-  const signature = await signMessage(`rebate-claim:${contract}:${nearAccount}:${week}:${requestHash}`);
-  return [200, { request_body: requestBody, request_hash: requestHash, wearable_signature: signature }];
+  return buildClaim(claims, body ?? {});
 }
 
 const parseDate = (value) => {
