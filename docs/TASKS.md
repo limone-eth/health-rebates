@@ -178,7 +178,8 @@ From [the record](decisions/2026-11-04-own-data.md): "Let judges upload a CSV or
 - [x] A bad file gets a 422, and its error repeats no value from the file. A test checks this.
 - [x] The server saves no upload, and the failure log holds only the type of error. A test checks that the state does not change.
 - [x] Before the run, the screen says what the server sees, what stays public, and that an upload has no wearable proof. The Verified panel says this too.
-- [ ] A real upload passes on a preview URL, and on the production URL.
+- [x] A real upload passes on a preview URL: paid, in 11 seconds. A bad file gets a 422.
+- [ ] A real upload passes on the production URL.
 - [ ] A tracker connection. It needs a real Open Wearables instance and accounts with device makers.
 
 ## 9f. Release for the judges
