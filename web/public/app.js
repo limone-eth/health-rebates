@@ -1,5 +1,6 @@
 // The member screen, the insurer screen and the Verified panel. Plain JavaScript with no build step.
 const NAMES = ["A", "B", "C"];
+const YOU = "You";
 const COUNT_UP_MS = 1200;
 // Steps can arrive together. This gap lets each tick show. The last tick holds a moment before the result lands.
 const STEP_GAP_MS = 280;
@@ -95,7 +96,8 @@ async function loadAll() {
   NAMES.forEach((name, index) => (app.members[name] = members[index]));
   for (const [name, { member, insurer_row: row }] of Object.entries(app.session)) {
     app.members[name] = member;
-    app.insurer.members = app.insurer.members.map((m) => (m.member === name ? row : m));
+    const known = app.insurer.members.some((m) => m.member === name);
+    app.insurer.members = known ? app.insurer.members.map((m) => (m.member === name ? row : m)) : [...app.insurer.members, row];
   }
   app.loadError = null;
 }
@@ -188,19 +190,48 @@ function memberHtml(m, { arrive, landed }) {
 
     <section class="bar">
       <div class="pick">
-        <p class="lab" id="pick-label">Sample member</p>
+        <p class="lab" id="pick-label">${app.members[YOU] ? "Whose week" : "Sample member"}</p>
         <div class="seg seg-letters" id="members" role="group" aria-labelledby="pick-label">
           <span class="lens" aria-hidden="true"></span>
-          ${NAMES.map((name) => `<button type="button" data-member="${name}" aria-pressed="${name === m.member}" aria-label="Member ${name}" ${running ? "disabled" : ""}>${name}</button>`).join("")}
+          ${pickNames().map((name) => `<button type="button" data-member="${name}" class="${name === YOU ? "pick-you" : ""}" aria-pressed="${name === m.member}" aria-label="${name === YOU ? "Your data" : `Member ${name}`}" ${running ? "disabled" : ""}>${name}</button>`).join("")}
         </div>
       </div>
-      <button type="button" class="btn btn-primary" data-action="claim" ${live && !running ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>
-      <p class="lab">${esc(running ? `About 15 seconds. Member ${app.run.name}.` : runNote(m.member, m.recorded_on))}</p>
+      ${m.member === YOU && !running ? "" : `<button type="button" class="btn btn-primary" data-action="claim" ${live && !running ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>`}
+      <p class="lab">${esc(running ? `About 15 seconds. ${app.run.name === YOU ? "Your data" : `Member ${app.run.name}`}.` : runNote(m.member, m.recorded_on))}</p>
       ${offNote()}
       ${app.runError ? `<p class="alert" role="alert">The claim stopped. ${esc(app.runError)} The last result is still here.</p>` : ""}
+      ${uploadHtml()}
       <div id="steps" aria-live="polite">${stepsHtml()}</div>
     </section>
   <div id="proof">${app.proof.member && m.outcome ? proofHtml(m, "your claim") : ""}</div>`;
+}
+
+// The preview shows an upload before its claim ends, so the picker needs the name from that point.
+const pickNames = () => (app.members[YOU] ? [...NAMES, YOU] : NAMES);
+const who = (name) => (name === YOU ? "you" : `member ${name}`);
+
+function uploadHtml() {
+  if (!app.status || app.status.mode !== "live" || app.run) return "";
+  if (!app.upload) {
+    return `<div class="upload-open">
+      <button type="button" class="link" data-action="upload-pick">Try your own data</button>
+      <a class="link" href="/sample-data.csv" download>Get the CSV template</a>
+      <input type="file" id="upload-file" accept=".csv,text/csv" hidden>
+    </div>`;
+  }
+  return `<div class="upload-panel" role="group" aria-label="Run a claim with your data">
+    <p class="lab">${esc(app.upload.fileName)}</p>
+    <ul class="rule">
+      <li>This server reads your file during the claim and keeps nothing.</li>
+      <li>A model in a sealed machine reads your week.</li>
+      <li>Your good days and the result stay public on a test network, under a made-up name.</li>
+      <li>This week has no proof from a wearable service, so anyone could type these numbers.</li>
+    </ul>
+    <div class="held-actions">
+      <button type="button" class="btn btn-primary btn-small" data-action="upload-run">Run with my data</button>
+      <button type="button" class="btn btn-secondary btn-small" data-action="upload-cancel">Cancel</button>
+    </div>
+  </div>`;
 }
 
 function stepStates() {
@@ -264,14 +295,14 @@ function insurerHtml(data, { arrive }) {
   <section class="stubs" aria-label="Claims for this week">
     ${data.members.map((m, index) => stubHtml(m, index, data, arrive)).join("")}
   </section>
-  <div id="proof">${opened ? proofHtml(opened, `member ${opened.member}`) : ""}</div>`;
+  <div id="proof">${opened ? proofHtml(opened, who(opened.member)) : ""}</div>`;
 }
 
 function stubHtml(m, index, data, arrive) {
   const live = app.status.can_decide;
   const held = m.outcome === "Held";
-  return `<article class="row ${arrive ? "arrive" : ""}" style="--i:${index}" aria-label="Claim from member ${esc(m.member)}">
-    <div class="closed"><p class="lab">Health data stays with member ${esc(m.member)}</p></div>
+  return `<article class="row ${arrive ? "arrive" : ""}" style="--i:${index}" aria-label="Claim from ${esc(who(m.member))}">
+    <div class="closed"><p class="lab">Health data stays with ${esc(who(m.member))}</p></div>
     <div class="open" style="view-transition-name: stub-${m.member}">
       <div class="tear" aria-hidden="true"></div>
       ${fieldsHtml([
@@ -280,7 +311,7 @@ function stubHtml(m, index, data, arrive) {
         ["Result", insurerResult(m)],
       ])}
       <div class="row-side">
-        ${m.outcome ? `<button type="button" class="link" data-action="proof-insurer" data-member="${m.member}" aria-expanded="${app.proof.insurer === m.member}" aria-controls="proof" aria-label="Verified: what was checked for member ${esc(m.member)}">${icon("check")}Verified</button>` : ""}
+        ${m.outcome ? `<button type="button" class="link" data-action="proof-insurer" data-member="${m.member}" aria-expanded="${app.proof.insurer === m.member}" aria-controls="proof" aria-label="Verified: what was checked for ${esc(who(m.member))}">${icon("check")}Verified</button>` : ""}
         ${
           held
             ? `<div class="held">
@@ -316,7 +347,7 @@ function proofHtml(m, who) {
       ${row(signerKnown, "The model ran in a sealed machine", "Intel signed a report on it")}
       ${row(signerKnown, "The key belongs to that machine", "Intel's report names it")}
       ${row(accepted, "The answer is unchanged", "Its signature matches")}
-      ${row(accepted, "Two signatures passed", "The model and the wearable service")}
+      ${row(accepted, "Two signatures passed", m.member === YOU ? "The model and this demo's key. An uploaded week has no proof from a wearable service." : "The model and the wearable service")}
       <li>${icon("arrow")}<span>Some facts are public</span><span class="ctx">${esc(publicFacts)}</span><a class="lab status" href="${esc(txUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open the public record, in a new tab">See record</a></li>
       <li>${icon("info")}<span>Who marks each day</span><span class="ctx">Code outside the sealed machine. The model counts the marks.</span><span class="lab status">Not sealed</span></li>
       <li>${icon("minus")}<span>The software in the sealed machine</span><span class="ctx">Its start-up file matches Intel's report. No one has confirmed that the software is safe.</span><span class="lab status off">Not proven</span></li>
@@ -422,14 +453,14 @@ function readRoute() {
   if (NAMES.includes(name)) app.name = name;
 }
 
-async function runClaim() {
-  const name = app.name;
+async function runClaim(csv = null) {
+  const name = csv === null ? app.name : YOU;
   app.run = { name, done: [] };
   app.runError = null;
   render();
   announce(`Claim started for member ${name}.`);
   try {
-    const res = await fetch(`/api/claims/${name}`, { method: "POST" });
+    const res = csv === null ? await fetch(`/api/claims/${name}`, { method: "POST" }) : await fetch("/api/uploads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csv });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `HTTP ${res.status}`);
@@ -447,6 +478,12 @@ async function runClaim() {
         });
       }
       if (event.type === "error") throw new Error(event.message);
+      if (event.type === "preview") {
+        app.previous = app.name;
+        app.members[YOU] = event.session.member;
+        app.name = YOU;
+        render();
+      }
       if (event.type === "done" && event.session) app.session[name] = event.session;
     });
     await shown;
@@ -457,12 +494,20 @@ async function runClaim() {
     // The ticket is already on the member screen, so only its new values land. The insurer screen brings in its rows.
     render({ arrive: app.view !== "member", landed: app.view === "member", count: true });
     announce(`Claim finished. Rebate: ${rebateText(app.members[name])}.`);
-    main.querySelector('[data-action="claim"]')?.focus({ preventScroll: true });
+    main.querySelector('[data-action="claim"], [data-action="upload-pick"]')?.focus({ preventScroll: true });
   } catch (error) {
+    // A failed upload must not leave its preview on the screen. An earlier upload that finished stays.
+    if (app.previous && app.session[YOU]) {
+      app.members[YOU] = app.session[YOU].member;
+    } else if (app.previous) {
+      app.name = app.previous;
+      delete app.members[YOU];
+    }
+    app.previous = null;
     app.run = null;
     app.runError = error.message;
     render();
-    main.querySelector('[data-action="claim"]')?.focus({ preventScroll: true });
+    main.querySelector('[data-action="claim"], [data-action="upload-pick"]')?.focus({ preventScroll: true });
   }
 }
 
@@ -536,6 +581,15 @@ main.addEventListener("click", (event) => {
     render({ arrive: true, count: true });
     main.querySelector(`#members [data-member="${member}"]`)?.focus({ preventScroll: true });
     announce(`Member ${member}. Rebate: ${rebateText(app.members[member])}.`);
+  } else if (action === "upload-pick") {
+    document.getElementById("upload-file").click();
+  } else if (action === "upload-cancel") {
+    app.upload = null;
+    render();
+  } else if (action === "upload-run") {
+    const { text } = app.upload;
+    app.upload = null;
+    runClaim(text);
   } else if (action === "claim") {
     runClaim();
   } else if (action === "proof-member") {
@@ -548,7 +602,7 @@ main.addEventListener("click", (event) => {
       button.setAttribute("aria-expanded", String(button.dataset.member === app.proof.insurer));
     });
     const chosen = app.insurer.members.find((m) => m.member === app.proof.insurer);
-    replaceProof(chosen ? proofHtml(chosen, `member ${chosen.member}`) : "");
+    replaceProof(chosen ? proofHtml(chosen, who(chosen.member)) : "");
   } else if (action === "approve" || action === "reject") {
     resolveHeld(member, action === "approve");
   } else if (action === "reload") {
@@ -559,6 +613,14 @@ main.addEventListener("click", (event) => {
 addEventListener("hashchange", () => go(readRoute));
 
 // The hash holds the route, so the skip link moves the focus and leaves the hash alone.
+main.addEventListener("change", async (event) => {
+  if (event.target.id !== "upload-file" || !event.target.files[0]) return;
+  const file = event.target.files[0];
+  app.runError = null;
+  app.upload = { fileName: file.name, text: await file.text() };
+  render();
+});
+
 document.querySelector(".skip").addEventListener("click", (event) => {
   event.preventDefault();
   main.focus();

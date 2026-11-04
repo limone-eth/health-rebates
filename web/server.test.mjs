@@ -204,6 +204,37 @@ describe("the hosted copy with keys", () => {
     assert.equal(res.status, 403);
   });
 
+  test("an upload runs a claim, returns its result to the page, and saves nothing", async () => {
+    const shared = JSON.stringify(state);
+    const csv = readFileSync(new URL("./public/sample-data.csv", import.meta.url), "utf8");
+    const res = await fetch(`${url}/api/uploads`, { method: "POST", headers: origin(), body: csv });
+    const events = (await res.text()).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(events[0].type, "preview");
+    assert.equal(events[0].session.member.member, "You");
+    assert.equal(events[0].session.member.rows.length, 7);
+    const done = events.at(-1);
+    assert.equal(done.type, "done");
+    assert.equal(done.session.member.rows.length, 7);
+    assert.equal(done.session.insurer_row.member, "You");
+    for (const field of HEALTH_FIELDS) assert.equal(field in done.session.insurer_row, false, field);
+    assert.equal(saves, 0);
+    assert.equal(JSON.stringify(state), shared);
+  });
+
+  test("a bad upload gets a 422 and does not run", async () => {
+    const res = await fetch(`${url}/api/uploads`, { method: "POST", headers: origin(), body: "not,a,file" });
+    assert.equal(res.status, 422);
+    assert.equal(runs, 0);
+  });
+
+  test("the app refuses an upload at the cap, and from another site", async () => {
+    const csv = readFileSync(new URL("./public/sample-data.csv", import.meta.url), "utf8");
+    assert.equal((await fetch(`${url}/api/uploads`, { method: "POST", body: csv })).status, 403);
+    totals = { paid: 4, not_paid: 3, held: 2, rejected: 1 };
+    assert.equal((await fetch(`${url}/api/uploads`, { method: "POST", headers: origin(), body: csv })).status, 403);
+    assert.equal(runs, 0);
+  });
+
   test("a failed claim shows no text from a service", async () => {
     const failing = await createApp({
       live: { runClaim: async () => { throw new Error("secret upstream detail"); } },
