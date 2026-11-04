@@ -260,6 +260,171 @@ describe("the hosted copy with keys", () => {
   });
 });
 
+describe("a tracker connection", () => {
+  const TOKEN = "secret-token-value";
+  const CLIENT_SECRET = "secret-client-value";
+  const stored = { account: "you.dev.testnet", tx: "newtx", signer: "0xabc", recorded_on: "2026-11-04", explanation: "Six good days." };
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+  // Days that end yesterday, in the shapes from the OpenAPI file of Oura.
+  const ouraDates = (count) => Array.from({ length: count }, (_, index) => new Date(Date.now() - (index + 1) * 86400000).toISOString().slice(0, 10));
+  let app;
+  let url;
+  let runs;
+  let saves;
+  let tokenRequests;
+  let dayCount;
+  let chainError = null;
+  let capFull = false;
+  const origin = () => ({ Origin: url.replace("http:", "https:") });
+  const trackerFetch = async (address, init) => {
+    const { pathname } = new URL(address);
+    if (pathname === "/oauth/token") {
+      tokenRequests.push(init.body);
+      return json({ access_token: TOKEN });
+    }
+    assert.equal(init.headers.Authorization, `Bearer ${TOKEN}`);
+    const dates = ouraDates(dayCount);
+    if (pathname.endsWith("/daily_activity")) return json({ data: dates.map((day) => ({ day, steps: 9000, medium_activity_time: 1500, high_activity_time: 600 })) });
+    if (pathname.endsWith("/sleep")) return json({ data: dates.map((day) => ({ day, type: "long_sleep", total_sleep_duration: 27000, average_heart_rate: 54, average_hrv: 48, bedtime_start: `${day}T22:45:00+01:00` })) });
+    return json({ data: dates.map((day) => ({ bpm: 70, source: "awake", timestamp: `${day}T09:00:00+00:00` })) });
+  };
+  const connect = async () => {
+    const res = await fetch(`${url}/api/trackers/oura/start`, { redirect: "manual" });
+    const location = new URL(res.headers.get("location"));
+    return { res, location, state: location.searchParams.get("state"), cookie: res.headers.get("set-cookie").split(";")[0] };
+  };
+  const claim = (body, cookie) =>
+    fetch(`${url}/api/trackers/oura/claims`, { method: "POST", headers: { ...origin(), ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(body) });
+
+  before(async () => {
+    app = await createApp({
+      live: { runClaim: async () => ((runs += 1), stored) },
+      hosted: true,
+      claimCap: 10,
+      capReason: "No claims left",
+      state: () => state,
+      saveState: () => (saves += 1),
+      read: fakeRead,
+      viewFn: async (pool, method) => {
+        if (method !== "get_totals") return fakeView(pool, method);
+        if (chainError) throw chainError;
+        return { paid: capFull ? 10 : 0, not_paid: 0, held: 0, rejected: 0 };
+      },
+      trackers: { oura: { clientId: "client-id", clientSecret: CLIENT_SECRET }, whoop: { clientId: "client-id" } },
+      trackerFetch,
+    });
+    await new Promise((resolve) => app.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${app.address().port}`;
+  });
+  beforeEach(() => {
+    runs = 0;
+    saves = 0;
+    tokenRequests = [];
+    dayCount = 20;
+  });
+  after(() => app.close());
+
+  test("the status lists only a tracker with both keys", async () => {
+    assert.deepEqual((await (await fetch(`${url}/api/status`)).json()).trackers, ["oura"]);
+  });
+
+  test("a tracker with no keys has no routes", async () => {
+    assert.equal((await fetch(`${url}/api/trackers/whoop/start`, { redirect: "manual" })).status, 404);
+    assert.equal((await claim({ code: "c", state: "s" })).status, 403);
+    assert.equal((await fetch(`${url}/api/trackers/whoop/claims`, { method: "POST", headers: origin(), body: "{}" })).status, 403);
+  });
+
+  test("the start sends the visitor to the device maker with a new state in an HttpOnly cookie, and no secret", async () => {
+    const { res, location, state: value } = await connect();
+    assert.equal(res.status, 302);
+    assert.equal(location.origin, "https://cloud.ouraring.com");
+    assert.equal(location.searchParams.get("redirect_uri"), `https://${new URL(url).host}/api/trackers/oura/callback`);
+    assert.match(value, /^[A-Za-z0-9]{8}$/);
+    assert.match(res.headers.get("set-cookie"), new RegExp(`^tracker_state=${value}; HttpOnly; SameSite=Lax; Path=/api/trackers; Max-Age=600; Secure`));
+    assert.equal(location.href.includes(CLIENT_SECRET), false);
+  });
+
+  test("the callback puts the code in the fragment, or says that the visitor refused", async () => {
+    const back = await fetch(`${url}/api/trackers/oura/callback?code=a%2Fb&state=abcd1234`, { redirect: "manual" });
+    assert.equal(back.headers.get("location"), "/#tracker/oura/a%2Fb/abcd1234");
+    const refused = await fetch(`${url}/api/trackers/oura/callback?error=access_denied&state=abcd1234`, { redirect: "manual" });
+    assert.equal(refused.headers.get("location"), "/#tracker/oura/denied");
+  });
+
+  test("a wrong or missing state gets a 403, and asks the device maker for nothing", async () => {
+    const { cookie } = await connect();
+    for (const res of [await claim({ code: "c", state: "wrong" }, cookie), await claim({ code: "c", state: "abcd1234" }), await claim({ state: cookie.split("=")[1] }, cookie)]) {
+      assert.equal(res.status, 403);
+    }
+    assert.equal(tokenRequests.length, 0);
+    assert.equal(runs, 0);
+  });
+
+  test("a request from another site gets a 403", async () => {
+    const { state: value, cookie } = await connect();
+    const res = await fetch(`${url}/api/trackers/oura/claims`, { method: "POST", headers: { Cookie: cookie }, body: JSON.stringify({ code: "c", state: value }) });
+    assert.equal(res.status, 403);
+    assert.equal(tokenRequests.length, 0);
+  });
+
+  test("fewer than 14 days gets a 422 with a clear error, and does not run", async () => {
+    dayCount = 13;
+    const { state: value, cookie } = await connect();
+    const res = await claim({ code: "c", state: value }, cookie);
+    assert.equal(res.status, 422);
+    assert.match((await res.json()).detail, /at least 14 days/);
+    assert.equal(runs, 0);
+  });
+
+  test("a claim takes a long code, names its source, and the response and state hold no token", async () => {
+    const shared = JSON.stringify(state);
+    const code = "c".repeat(2000);
+    const { state: value, cookie } = await connect();
+    const res = await claim({ code, state: value }, cookie);
+    assert.match(res.headers.get("set-cookie"), /^tracker_state=; .*Max-Age=0/);
+    const text = await res.text();
+    const events = text.trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(events[0].type, "preview");
+    const done = events.at(-1);
+    assert.equal(done.type, "done");
+    assert.equal(done.session.member.source, "oura");
+    assert.equal(done.session.insurer_row.source, "oura");
+    assert.equal(done.session.member.rows.length, 7);
+    for (const field of HEALTH_FIELDS) assert.equal(field in done.session.insurer_row, false, field);
+    assert.equal(runs, 1);
+    assert.match(tokenRequests[0], new RegExp(`code=${code}`));
+    for (const secret of [TOKEN, CLIENT_SECRET, code]) {
+      assert.equal(text.includes(secret), false);
+      assert.equal(JSON.stringify(state).includes(secret), false);
+    }
+    assert.equal(saves, 0);
+    assert.equal(JSON.stringify(state), shared);
+  });
+
+  test("at the cap, or if the chain does not answer, the code stays unspent and the page shows no text from a service", async () => {
+    const { state: value, cookie } = await connect();
+    chainError = new Error("view get_totals: HTTP 429");
+    const down = await claim({ code: "c", state: value }, cookie);
+    chainError = null;
+    assert.equal(down.status, 502);
+    assert.equal((await down.json()).detail.includes("429"), false);
+    const again = await connect();
+    capFull = true;
+    const full = await claim({ code: "c", state: again.state }, again.cookie);
+    capFull = false;
+    assert.equal(full.status, 403);
+    assert.equal(tokenRequests.length, 0);
+    assert.equal(runs, 0);
+  });
+
+  test("the same state cannot start a second claim", async () => {
+    const { state: value, cookie } = await connect();
+    await (await claim({ code: "c", state: value }, cookie)).text();
+    const again = await fetch(`${url}/api/trackers/oura/claims`, { method: "POST", headers: origin(), body: JSON.stringify({ code: "c", state: value }) });
+    assert.equal(again.status, 403);
+  });
+});
+
 test("on one machine, a live claim saves its result in the state", async () => {
   const shared = structuredClone(state);
   const saved = [];

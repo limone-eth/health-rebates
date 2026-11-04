@@ -179,8 +179,21 @@ From [the record](decisions/2026-11-04-own-data.md): "Let judges upload a CSV or
 - [x] The server saves no upload, and the failure log holds only the type of error. A test checks that the state does not change.
 - [x] Before the run, the screen says what the server sees, what stays public, and that an upload has no wearable proof. The Verified panel says this too.
 - [x] A real upload passes on a preview URL: paid, in 11 seconds. A bad file gets a 422.
-- [ ] A real upload passes on the production URL.
-- [ ] A tracker connection. It needs a real Open Wearables instance and accounts with device makers.
+- [x] A real upload passes on the production URL: paid, in 196 seconds, [tx 9yLJznmi](https://testnet.nearblocks.io/txns/9yLJznmi4XAWdRt1V1QTGP6SNuBRcHioVHe2TaonYMGL). The model took 189 of those seconds. An earlier try stopped when my client's 200-second limit ended it.
+
+## 9e5. Claims from a connected tracker
+
+From [the record](decisions/2026-11-04-tracker-setup.md): "Connect the app to each device maker by OAuth, on Vercel, with no Open Wearables instance."
+
+- [x] Whoop data maps to the claim rows. A test with Whoop's documented shapes checks this. From: "Build Whoop and Oura."
+- [x] Oura data maps to the claim rows. A test with Oura's documented shapes checks this. From: "Build Whoop and Oura."
+- [ ] A visitor connects by OAuth and a real claim runs. The state value is checked. From: "Connect the app to each device maker by OAuth".
+- [x] The server keeps no tracker data and no token. A test checks this. From: "The server keeps no tracker data and no tracker token after the claim."
+- [x] Fewer than 14 days gives a clear error, and the CSV stays available. A test checks this. From: "A connection with fewer than 14 days gets a clear error".
+- [x] The Verified panel says what the second signature proves for tracker data. From: "The Verified panel says what the second signature proves".
+- [ ] The owner creates the Whoop app and adds its keys to Vercel production. Criteria: `/api/status` lists `whoop`, and the page shows "Connect Whoop". From [the device record](decisions/2026-11-04-tracker-test-device.md): "I create the Whoop app and add its keys."
+- [ ] A real Whoop connection passes on the production URL. Criteria: the owner signs in, a real claim finishes, the record is on testnet, and the address holds no code after the return. From: "I own a Whoop."
+- [ ] The Oura link stays hidden with no Oura keys. Criteria: `/api/status` on production does not list `oura`. From: "Oura stays hidden unless I also add its keys."
 
 ## 9f. Release for the judges
 

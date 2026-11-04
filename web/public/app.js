@@ -25,6 +25,9 @@ const ICONS = {
   minus: '<path d="M5 12h14"/>',
 };
 
+const TRACKER_NAMES = { whoop: "Whoop", oura: "Oura" };
+const WHOOP_NOTE = "Whoop gives heart rate zones for workouts only, so active minutes count workouts only.";
+
 const app = {
   status: null,
   view: "member",
@@ -198,6 +201,7 @@ function memberHtml(m, { arrive, landed }) {
       </div>
       ${m.member === YOU && !running ? "" : `<button type="button" class="btn btn-primary" data-action="claim" ${live && !running ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>`}
       <p class="lab">${esc(running ? `About 15 seconds. ${app.run.name === YOU ? "Your data" : `Member ${app.run.name}`}.` : runNote(m.member, m.recorded_on))}</p>
+      ${m.source === "whoop" && !running ? `<p class="rule">${esc(WHOOP_NOTE)}</p>` : ""}
       ${offNote()}
       ${app.runError ? `<p class="alert" role="alert">The claim stopped. ${esc(app.runError)} The last result is still here.</p>` : ""}
       ${uploadHtml()}
@@ -212,10 +216,12 @@ const who = (name) => (name === YOU ? "you" : `member ${name}`);
 
 function uploadHtml() {
   if (!app.status || app.status.mode !== "live" || app.run) return "";
+  if (app.connect) return connectHtml(app.connect);
   if (!app.upload) {
     return `<div class="upload-open">
       <button type="button" class="link" data-action="upload-pick">Try your own data</button>
       <a class="link" href="/sample-data.csv" download>Get the CSV template</a>
+      ${(app.status.trackers ?? []).map((maker) => `<button type="button" class="link" data-action="connect-pick" data-maker="${esc(maker)}">Connect ${esc(TRACKER_NAMES[maker])}</button>`).join("")}
       <input type="file" id="upload-file" accept=".csv,text/csv" hidden>
     </div>`;
   }
@@ -230,6 +236,24 @@ function uploadHtml() {
     <div class="held-actions">
       <button type="button" class="btn btn-primary btn-small" data-action="upload-run">Run with my data</button>
       <button type="button" class="btn btn-secondary btn-small" data-action="upload-cancel">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function connectHtml(maker) {
+  const name = TRACKER_NAMES[maker];
+  return `<div class="upload-panel" role="group" aria-label="Run a claim with your ${esc(name)} data">
+    <p class="lab">Connect ${esc(name)}</p>
+    <ul class="rule">
+      <li>${esc(name)} sends this server your last 36 days during the claim. The server keeps no data and no token.</li>
+      <li>A model in a sealed machine reads your week.</li>
+      <li>Your good days and the result stay public on a test network, under a made-up name.</li>
+      <li>This server signs your week with its own key. ${esc(name)} does not sign it.</li>
+      ${maker === "whoop" ? `<li>${esc(WHOOP_NOTE)}</li>` : ""}
+    </ul>
+    <div class="held-actions">
+      <a class="btn btn-primary btn-small" href="/api/trackers/${esc(maker)}/start">Continue to ${esc(name)}</a>
+      <button type="button" class="btn btn-secondary btn-small" data-action="connect-cancel">Cancel</button>
     </div>
   </div>`;
 }
@@ -330,6 +354,13 @@ function stubHtml(m, index, data, arrive) {
   </article>`;
 }
 
+function secondSignature(m) {
+  if (m.member !== YOU) return "The model and the wearable service";
+  const name = TRACKER_NAMES[m.source];
+  if (!name) return "The model and this demo's key. An uploaded week has no proof from a wearable service.";
+  return `The model and this demo's key. This server read the week from ${name} and signed it. ${name} did not sign it.`;
+}
+
 // Real checks only: each row reads what the chain holds for this claim.
 function proofHtml(m, who) {
   const accepted = Boolean(m.outcome);
@@ -347,7 +378,7 @@ function proofHtml(m, who) {
       ${row(signerKnown, "The model ran in a sealed machine", "Intel signed a report on it")}
       ${row(signerKnown, "The key belongs to that machine", "Intel's report names it")}
       ${row(accepted, "The answer is unchanged", "Its signature matches")}
-      ${row(accepted, "Two signatures passed", m.member === YOU ? "The model and this demo's key. An uploaded week has no proof from a wearable service." : "The model and the wearable service")}
+      ${row(accepted, "Two signatures passed", secondSignature(m))}
       <li>${icon("arrow")}<span>Some facts are public</span><span class="ctx">${esc(publicFacts)}</span><a class="lab status" href="${esc(txUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open the public record, in a new tab">See record</a></li>
       <li>${icon("info")}<span>Who marks each day</span><span class="ctx">Code outside the sealed machine. The model counts the marks.</span><span class="lab status">Not sealed</span></li>
       <li>${icon("minus")}<span>The software in the sealed machine</span><span class="ctx">Its start-up file matches Intel's report. No one has confirmed that the software is safe.</span><span class="lab status off">Not proven</span></li>
@@ -453,14 +484,15 @@ function readRoute() {
   if (NAMES.includes(name)) app.name = name;
 }
 
-async function runClaim(csv = null) {
-  const name = csv === null ? app.name : YOU;
+// With no `send`, this runs the sample member on the screen. A `send` starts a claim with the visitor's own data.
+async function runClaim(send = null) {
+  const name = send ? YOU : app.name;
   app.run = { name, done: [] };
   app.runError = null;
   render();
-  announce(`Claim started for member ${name}.`);
+  announce(`Claim started for ${who(name)}.`);
   try {
-    const res = csv === null ? await fetch(`/api/claims/${name}`, { method: "POST" }) : await fetch("/api/uploads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csv });
+    const res = await (send ? send() : fetch(`/api/claims/${name}`, { method: "POST" }));
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `HTTP ${res.status}`);
@@ -589,7 +621,14 @@ main.addEventListener("click", (event) => {
   } else if (action === "upload-run") {
     const { text } = app.upload;
     app.upload = null;
-    runClaim(text);
+    runClaim(() => fetch("/api/uploads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: text }));
+  } else if (action === "connect-pick") {
+    app.runError = null;
+    app.connect = target.dataset.maker;
+    render();
+  } else if (action === "connect-cancel") {
+    app.connect = null;
+    render();
   } else if (action === "claim") {
     runClaim();
   } else if (action === "proof-member") {
@@ -626,17 +665,41 @@ document.querySelector(".skip").addEventListener("click", (event) => {
   main.focus();
 });
 
+// The device maker sends the visitor back with a code in the fragment. The page takes it out of the address at once.
+function takeTrackerReturn() {
+  const match = /^#tracker\/([a-z]+)\/(.+)$/.exec(location.hash);
+  if (!match) return null;
+  history.replaceState(null, "", location.pathname);
+  const [code, state] = match[2].split("/").map(decodeURIComponent);
+  return { maker: match[1], code, state };
+}
+
+function finishConnection({ maker, code, state }) {
+  if (code === "denied") {
+    app.runError = `${TRACKER_NAMES[maker] ?? "The device maker"} did not connect. You can try again or use a CSV.`;
+    render();
+    return;
+  }
+  runClaim(() => fetch(`/api/trackers/${maker}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, state }) }));
+}
+
 async function start() {
   app.loadError = null;
   render();
   try {
     await loadAll();
     render({ arrive: true, count: true });
+    if (trackerReturn) {
+      const connection = trackerReturn;
+      trackerReturn = null;
+      finishConnection(connection);
+    }
   } catch (error) {
     app.loadError = error.message;
     render();
   }
 }
 
+let trackerReturn = takeTrackerReturn();
 readRoute();
 start();

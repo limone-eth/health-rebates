@@ -137,6 +137,7 @@ main { display: flex; flex-direction: column; gap: 24px; padding: 32px var(--gut
   white-space: nowrap;
   transition: transform 150ms var(--rise), background-color 150ms ease, box-shadow 150ms ease;
 }
+a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .btn:active:not(:disabled) { transform: scale(0.96); }
 .btn-primary { background: var(--ink); color: var(--white); }
 .btn-primary:hover:not(:disabled) { background: var(--ink-hover); }
@@ -174,7 +175,7 @@ main { display: flex; flex-direction: column; gap: 24px; padding: 32px var(--gut
 .seg-letters > button.pick-you { width: 56px; }
 #steps { flex-basis: 100%; }
 #steps:empty { display: none; }
-.bar .reason, .bar .alert { flex-basis: 100%; }
+.bar .reason, .bar .alert, .bar > .rule { flex-basis: 100%; }
 
 .steps { width: 100%; max-width: 480px; }
 .steps li { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 8px 0; border-top: 1px solid var(--stone); font-size: 14px; color: var(--ink-2); }

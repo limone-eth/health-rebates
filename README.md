@@ -6,7 +6,7 @@ Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Pr
 
 **Status: the demo runs end to end, on NEAR testnet.** A fresh clone passes the steps below. See [docs/PLAN.md](docs/PLAN.md).
 
-**Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. Press "Run a live claim" to send a real claim to NEAR testnet, with no setup. You see the result on your screen only. You can also upload your own data as a CSV, from the template on the page. A claim cap limits the hosted copy, and Approve and Decline stay off. At the cap, the page shows the last real results only.
+**Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. Press "Run a live claim" to send a real claim to NEAR testnet, with no setup. You see the result on your screen only. You can also upload your own data as a CSV, from the template on the page. When the Whoop or Oura keys are set, you can also connect that tracker. A claim cap limits the hosted copy, and Approve and Decline stay off. At the cap, the page shows the last real results only.
 
 ## What runs today
 
@@ -72,6 +72,7 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 - Each hosted claim stays on the chain, so the pool's totals and balance change. The results that visitors see first stay the same.
 - Each live claim uses a new account, so one member can claim one week more than once. A real service links one NEAR account to each member.
 - An uploaded CSV has no proof from a wearable service: the demo's key signs it, so anyone can type a week that gets paid. The server reads the file during the claim and keeps nothing. The model reads the week in the TEE. The good days and the result stay public on testnet, under a made-up account. Do not upload data that you want to keep private.
+- A connected Whoop or Oura has no proof from the device maker: this server reads the week by OAuth and signs it with the demo's key. The server keeps no data and no token. The good days and the result stay public on testnet, as with a CSV. Whoop gives heart rate zones for workouts only, so its active minutes count workouts only.
 - The sample members are synthetic. Testnet only. A simulated insurer.
 
 ## Baseline

@@ -11,6 +11,7 @@
 !web/views.mjs
 !web/live.mjs
 !web/upload.mjs
+!web/trackers.mjs
 !web/state.json
 !web/members.json
 !web/public
