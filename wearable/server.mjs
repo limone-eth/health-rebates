@@ -22,10 +22,15 @@ export async function buildClaim({ model, contract, signMessage }, { user_id: us
   if (week !== CLAIM_WEEK.start) return [422, { detail: "Only the current claim week can be claimed" }];
   if (typeof nearAccount !== "string" || !NEAR_ACCOUNT.test(nearAccount)) return [422, { detail: "Bad near_account" }];
 
-  const requestBody = JSON.stringify(buildClaimRequest(model, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK)));
+  return [200, await signRows({ model, contract, signMessage }, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK), nearAccount, week)];
+}
+
+// No HTTP route gives this function rows from a caller. Only the demo's own upload path in web/live.mjs does, and the screen says that an upload has no proof.
+export async function signRows({ model, contract, signMessage }, baselineRows, claimRows, nearAccount, week) {
+  const requestBody = JSON.stringify(buildClaimRequest(model, baselineRows, claimRows));
   const requestHash = createHash("sha256").update(requestBody).digest("hex");
   const signature = await signMessage(`rebate-claim:${contract}:${nearAccount}:${week}:${requestHash}`);
-  return [200, { request_body: requestBody, request_hash: requestHash, wearable_signature: signature }];
+  return { request_body: requestBody, request_hash: requestHash, wearable_signature: signature };
 }
 
 async function createClaim(req, claims) {

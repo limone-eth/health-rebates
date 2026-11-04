@@ -6,13 +6,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { summarizeBaseline } from "../tee/claim.mjs";
 import { loadMembers } from "../tee/members.mjs";
+import { MAX_UPLOAD_BYTES, parseUpload, UploadError } from "./upload.mjs";
 import { insurerView, memberView } from "./views.mjs";
 
 const STATE_FILE = new URL("./state.json", import.meta.url);
 const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".csv": "text/csv" };
 const MEMBER_NAMES = ["A", "B", "C"];
 const MAX_BODY = 256;
+const UPLOAD_NAME = "You";
 export const DEFAULT_MODEL = "Qwen/Qwen3.8-27B";
 export const HELD_REASON = "Approve and Decline are off on this shared copy, so the demo stays the same for each visitor.";
 
@@ -117,6 +119,56 @@ export async function createApp({
     return { type: "done", member: name, session: { member: memberData, insurer_row: insurerRow } };
   }
 
+  const readText = async (req) => {
+    let text = "";
+    for await (const chunk of req) {
+      text += chunk;
+      if (text.length > MAX_UPLOAD_BYTES) throw new UploadError("The file is too large.");
+    }
+    return text;
+  };
+
+  // An upload runs like a claim, but its data and result never go in the state, on any host.
+  const uploadView = async (state, upload, stored) => {
+    const shown = { ...state, members: { ...state.members, [UPLOAD_NAME]: stored } };
+    const [config, claim, totals] = await Promise.all([viewFn(state.pool, "get_config"), stored.account ? read(shown, UPLOAD_NAME) : null, viewFn(state.pool, "get_totals")]);
+    const facts = claim ?? { name: UPLOAD_NAME, stored, record: null, signerRegistered: null };
+    return {
+      member: memberView({ claim: facts, config, rows: upload.claimRows, baseline: summarizeBaseline(upload.baselineRows) }),
+      insurer_row: insurerView({ pool: state.pool, config, totals, claims: [facts] }).members[0],
+    };
+  };
+
+  async function runUpload(req, res) {
+    if (running) return send(res, 409, { detail: "A claim is running. Try again in a minute." });
+    running = true;
+    try {
+      let upload;
+      try {
+        upload = parseUpload(await readText(req));
+      } catch (error) {
+        if (error instanceof UploadError) return send(res, 422, { detail: error.message });
+        throw error;
+      }
+      const state = getState();
+      if (await capReached(state)) return send(res, 403, { detail: capReason });
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (event) => res.write(`${JSON.stringify(event)}\n`);
+      try {
+        write({ type: "preview", member: UPLOAD_NAME, session: await uploadView(state, upload, {}) });
+        const stored = await live.runClaim(UPLOAD_NAME, (step, text) => write({ type: "step", step, text }), upload);
+        write({ type: "done", member: UPLOAD_NAME, session: await uploadView(state, upload, stored) });
+      } catch (error) {
+        // The error can name a service, and the log must not hold uploaded data. So this logs only the type of error.
+        console.error("upload claim failed:", error.name);
+        write({ type: "error", message: "The claim did not finish. Try again." });
+      }
+      res.end();
+    } finally {
+      running = false;
+    }
+  }
+
   async function runClaim(req, res, name) {
     if (running) return send(res, 409, { detail: "A claim is running. Try again in a minute." });
     running = true;
@@ -167,6 +219,10 @@ export async function createApp({
 
       if (req.method === "POST") {
         if (!sameSite(req)) return send(res, 403, { detail: "Request from another site" });
+        if (pathname === "/api/uploads") {
+          if (!live) return send(res, 403, { detail: liveReason });
+          return await runUpload(req, res);
+        }
         const match = pathname.match(/^\/api\/(claims|held)\/([ABC])$/);
         if (!match) return send(res, 404, { detail: "Not found" });
         if (!live) return send(res, 403, { detail: liveReason });

@@ -169,6 +169,18 @@ From [the record](decisions/2026-11-04-claim-motion.md): "I run emil-design-eng 
 - [x] The ticket keeps its height from the start of a claim to the result.
 - [x] A real claim passes on the production URL with this code: B not paid, in 14 seconds.
 
+## 9e4. Claims with a visitor's own data
+
+From [the record](decisions/2026-11-04-own-data.md): "Let judges upload a CSV or connect a tracker with their real data."
+
+- [x] A CSV upload with 14 to 60 days runs a real claim. The last 7 days are the claim week.
+- [x] One piece of code marks each day for sample members and uploads. A test shows that the template gives the same rows as member A.
+- [x] A bad file gets a 422, and its error repeats no value from the file. A test checks this.
+- [x] The server saves no upload, and the failure log holds only the type of error. A test checks that the state does not change.
+- [x] Before the run, the screen says what the server sees, what stays public, and that an upload has no wearable proof. The Verified panel says this too.
+- [ ] A real upload passes on a preview URL, and on the production URL.
+- [ ] A tracker connection. It needs a real Open Wearables instance and accounts with device makers.
+
 ## 9f. Release for the judges
 
 From [the record](decisions/2026-11-04-release-for-judges.md): "I merge PRs 1 to 5 in order". From [the publish record](decisions/2026-11-04-publish-from-clean-main.md): "Make a new public repo named health-rebates that holds only the clean main."

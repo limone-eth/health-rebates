@@ -6,7 +6,7 @@ import { EXPLORER, view } from "../chain/view.mjs";
 import { buildExplanationRequest, decide, parseResult } from "../tee/claim.mjs";
 import { createNearAi } from "../tee/near-ai.mjs";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
-import { buildClaim } from "../wearable/server.mjs";
+import { buildClaim, signRows } from "../wearable/server.mjs";
 
 // 0.07 NEAR. A claim with 50 Tgas needs about 0.051 NEAR up front, and the account also pays for its storage.
 const MEMBER_DEPOSIT = (NEAR * 7n) / 100n;
@@ -33,7 +33,8 @@ export async function createLive({ pool, model }) {
   // The wearable service runs in this process for the demo, because the host does not let a function open a local server.
   const claims = { model, contract: pool, signMessage: (message) => wearableSigner.signMessage({ message }) };
 
-  async function requestClaim(name, nearAccount) {
+  async function requestClaim(name, nearAccount, upload) {
+    if (upload) return signRows(claims, upload.baselineRows, upload.claimRows, nearAccount, CLAIM_WEEK.start);
     const [status, body] = await buildClaim(claims, { user_id: idOf[name], near_account: nearAccount, week: CLAIM_WEEK.start });
     if (status !== 200) throw new Error(`wearable service: ${body.detail}`);
     return body;
@@ -49,7 +50,7 @@ export async function createLive({ pool, model }) {
   }
 
   // Calls onStep for each finished step. Returns what the state file keeps. Throws if any check fails.
-  async function runClaim(name, onStep) {
+  async function runClaim(name, onStep, upload = null) {
     // Two claims can start in the same millisecond on the host.
     const stamp = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
     const memberId = `${name.toLowerCase()}-${stamp}.${rootId}`;
@@ -63,8 +64,8 @@ export async function createLive({ pool, model }) {
     await waitForAccount(member);
     onStep("account", `New member account ${memberId}.`);
 
-    const claim = await requestClaim(name, memberId);
-    onStep("wearable", "The wearable service built the request and signed its hash.");
+    const claim = await requestClaim(name, memberId, upload);
+    onStep("wearable", upload ? "This demo's key signed the uploaded week." : "The wearable service built the request and signed its hash.");
 
     const completion = await nearAi.complete(claim.request_body);
     if (sha256(completion.requestBody) !== claim.request_hash) throw new Error("Sent bytes do not match the signed hash");
