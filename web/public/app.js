@@ -222,7 +222,7 @@ function insurerHtml(data, { arrive }) {
   return `<section class="summary">
     <div class="head">
       <h1 class="display" tabindex="-1">
-        <span>Health that pays,</span>
+        <span>Reward healthy customers,</span>
         <span class="ctx">without holding health data.</span>
       </h1>
       ${note ? `<p class="lab">${esc(note)}</p>` : ""}
