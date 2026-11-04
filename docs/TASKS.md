@@ -179,7 +179,7 @@ From [the record](decisions/2026-11-04-own-data.md): "Let judges upload a CSV or
 - [x] The server saves no upload, and the failure log holds only the type of error. A test checks that the state does not change.
 - [x] Before the run, the screen says what the server sees, what stays public, and that an upload has no wearable proof. The Verified panel says this too.
 - [x] A real upload passes on a preview URL: paid, in 11 seconds. A bad file gets a 422.
-- [ ] A real upload passes on the production URL.
+- [x] A real upload passes on the production URL: paid, in 196 seconds, [tx 9yLJznmi](https://testnet.nearblocks.io/txns/9yLJznmi4XAWdRt1V1QTGP6SNuBRcHioVHe2TaonYMGL). The model took 189 of those seconds. An earlier try stopped when my client's 200-second limit ended it.
 
 ## 9e5. Claims from a connected tracker
 
