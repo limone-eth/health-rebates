@@ -191,8 +191,9 @@ From [the record](decisions/2026-11-04-tracker-setup.md): "Connect the app to ea
 - [x] The server keeps no tracker data and no token. A test checks this. From: "The server keeps no tracker data and no tracker token after the claim."
 - [x] Fewer than 14 days gives a clear error, and the CSV stays available. A test checks this. From: "A connection with fewer than 14 days gets a clear error".
 - [x] The Verified panel says what the second signature proves for tracker data. From: "The Verified panel says what the second signature proves".
-- [ ] The owner creates the Whoop and Oura apps, and adds the keys. From: "The owner creates each developer app and adds its keys."
-- [ ] A real connection passes on the production URL, for each device that the owner has.
+- [ ] The owner creates the Whoop app and adds its keys to Vercel production. Criteria: `/api/status` lists `whoop`, and the page shows "Connect Whoop". From [the device record](decisions/2026-11-04-tracker-test-device.md): "I create the Whoop app and add its keys."
+- [ ] A real Whoop connection passes on the production URL. Criteria: the owner signs in, a real claim finishes, the record is on testnet, and the address holds no code after the return. From: "I own a Whoop."
+- [ ] The Oura link stays hidden with no Oura keys. Criteria: `/api/status` on production does not list `oura`. From: "Oura stays hidden unless I also add its keys."
 
 ## 9f. Release for the judges
 
