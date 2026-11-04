@@ -176,10 +176,18 @@ main { display: flex; flex-direction: column; gap: 24px; padding: 32px var(--gut
 .steps li { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 8px 0; border-top: 1px solid var(--stone); font-size: 14px; color: var(--ink-2); }
 .steps li.done { color: var(--ink); }
 .steps li.now { color: var(--ink); }
-.steps .dot { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
-.steps .dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--stone); }
-.steps li.now .dot::before { background: var(--ember); animation: wait 1.6s ease-in-out infinite; }
-@keyframes wait { 50% { opacity: 0.35; } }
+.steps li[hidden] { display: none; }
+.steps .mark { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
+.steps .mark > * { grid-area: 1 / 1; }
+.steps .dot { position: relative; width: 6px; height: 6px; border-radius: 50%; background: var(--stone); transition: opacity 160ms var(--rise), transform 160ms var(--rise), background-color 160ms var(--rise); }
+.steps .icon { opacity: 0; transform: scale(0.25); filter: blur(4px); transition: opacity 240ms var(--rise), transform 240ms var(--rise), filter 240ms var(--rise); }
+.steps li.now .dot { background: var(--ember); }
+.steps li.now .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ember); animation: wait 1.4s var(--rise) infinite; }
+.steps li.done .dot { opacity: 0; transform: scale(0.25); }
+.steps li.done .icon { opacity: 1; transform: none; filter: none; }
+.steps.enter li { animation: step-in 300ms var(--rise) backwards; animation-delay: calc(var(--i) * 40ms); }
+@keyframes wait { from { opacity: 0.5; transform: scale(1); } to { opacity: 0; transform: scale(3.2); } }
+@keyframes step-in { from { opacity: 0; transform: translateY(8px); } }
 
 /* The wide ticket. Two pieces, cut at the notches, so the tear is real. */
 .pass, .row {
@@ -191,6 +199,22 @@ main { display: flex; flex-direction: column; gap: 24px; padding: 32px var(--gut
 .pass.arrive { animation: arrive 700ms var(--rise) backwards; }
 .row.arrive { animation: arrive 700ms var(--rise) backwards; animation-delay: calc(var(--i) * 100ms); }
 @keyframes arrive { from { opacity: 0; transform: translateY(16px); } }
+
+/* A live claim on the member screen: the stub says "Working", then the tear draws and each value lands. */
+/* Keeps the height of the ticket, so that nothing moves when the result lands. */
+.link-slot { visibility: hidden; }
+.pass.running .stub-part dd { animation: working 1.6s ease-in-out infinite; }
+.pass.running .stub-part .field:nth-child(2) dd { animation-delay: 120ms; }
+.pass.running .stub-part .field:nth-child(3) dd { animation-delay: 240ms; }
+.pass.landed .stub-part .tear { animation: tear-draw 520ms var(--rise) backwards; }
+.pass.landed .stub-part dd, .pass.landed .stub-part .link { animation: land 360ms var(--rise) backwards; animation-delay: 120ms; }
+.pass.landed .stub-part .field:nth-child(2) dd { animation-delay: 190ms; }
+.pass.landed .stub-part .field:nth-child(3) dd { animation-delay: 260ms; }
+.pass.landed .stub-part .link { animation-delay: 380ms; }
+@keyframes working { 50% { opacity: 0.55; } }
+@keyframes tear-draw { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes tear-draw-across { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes land { from { opacity: 0; transform: translateY(6px); filter: blur(4px); } }
 
 .keep, .closed, .stub-part, .open {
   --cut-a: radial-gradient(circle 11px at 100% 0, #0000 98%, #000);
@@ -309,6 +333,7 @@ details.tech dd { font: 400 13px/1.5 var(--mono); overflow-wrap: anywhere; }
     --cut-b: radial-gradient(circle 11px at 100% 0, #0000 98%, #000);
     border-radius: 0 0 12px 12px;
   }
+  .pass.landed .stub-part .tear { animation-name: tear-draw-across; }
   .tear, .open .tear {
     top: 0;
     bottom: auto;

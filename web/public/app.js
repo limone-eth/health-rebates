@@ -1,6 +1,9 @@
 // The member screen, the insurer screen and the Verified panel. Plain JavaScript with no build step.
 const NAMES = ["A", "B", "C"];
 const COUNT_UP_MS = 1200;
+// Steps can arrive together. This gap lets each tick show. The last tick holds a moment before the result lands.
+const STEP_GAP_MS = 280;
+const STEP_SETTLE_MS = 420;
 const HELD_POLL_ATTEMPTS = 12;
 const HELD_POLL_MS = 1500;
 
@@ -135,7 +138,7 @@ function weekRows(m) {
   </table>`;
 }
 
-function memberHtml(m, { arrive }) {
+function memberHtml(m, { arrive, landed }) {
   const rule = readRule(m.rule);
   const running = Boolean(app.run);
   const live = app.status.mode === "live";
@@ -151,7 +154,7 @@ function memberHtml(m, { arrive }) {
       <p class="lede">Healthy weeks earn you a rebate. Your insurer sees the result, never your steps or sleep.</p>
     </section>
 
-    <article class="pass ${arrive ? "arrive" : ""}" aria-label="Your ticket for this week">
+    <article class="pass ${arrive ? "arrive" : ""} ${landed ? "landed" : ""} ${running ? "running" : ""}" aria-label="Your ticket for this week">
       <div class="keep">
         <div class="stamp">
           <p class="lab">Week of ${esc(longDate(m.rows[0].date))}</p>
@@ -179,7 +182,7 @@ function memberHtml(m, { arrive }) {
               ["Usual week", patternText(m)],
               ["Rebate", rebateText(m)],
             ])}
-        ${shown.outcome ? `<button type="button" class="link" data-action="proof-member" aria-expanded="${app.proof.member}" aria-controls="proof">${icon("check")}Verified</button>` : ""}
+        ${shown.outcome ? `<button type="button" class="link" data-action="proof-member" aria-expanded="${app.proof.member}" aria-controls="proof">${icon("check")}Verified</button>` : running ? `<span class="link link-slot" aria-hidden="true">${icon("check")}Verified</span>` : ""}
       </div>
     </article>
 
@@ -192,7 +195,7 @@ function memberHtml(m, { arrive }) {
         </div>
       </div>
       <button type="button" class="btn btn-primary" data-action="claim" ${live && !running ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>
-      <p class="lab">${esc(running ? `About 20 seconds. Member ${app.run.name}.` : runNote(m.member, m.recorded_on))}</p>
+      <p class="lab">${esc(running ? `About 15 seconds. Member ${app.run.name}.` : runNote(m.member, m.recorded_on))}</p>
       ${offNote()}
       ${app.runError ? `<p class="alert" role="alert">The claim stopped. ${esc(app.runError)} The last result is still here.</p>` : ""}
       <div id="steps" aria-live="polite">${stepsHtml()}</div>
@@ -200,18 +203,37 @@ function memberHtml(m, { arrive }) {
   <div id="proof">${app.proof.member && m.outcome ? proofHtml(m, "your claim") : ""}</div>`;
 }
 
-function stepsHtml() {
-  if (!app.run) return "";
+function stepStates() {
   const done = new Set(app.run.done);
-  // The signer step runs only for a new signer, so it shows only when it happens.
   const list = STEPS.filter(([id]) => id !== "signer" || done.has("signer"));
   const nextId = list.find(([id]) => !done.has(id))?.[0];
-  return `<ol class="steps">${list
-    .map(([id, text]) => {
-      const state = done.has(id) ? "done" : id === nextId ? "now" : "";
-      return `<li class="${state}">${state === "done" ? icon("check") : '<span class="dot"></span>'}<span>${esc(text)}${state === "done" ? '<span class="sr-only"> Done.</span>' : ""}</span></li>`;
-    })
-    .join("")}</ol>`;
+  return (id) => (done.has(id) ? "done" : id === nextId ? "now" : "");
+}
+
+function stepsHtml() {
+  if (!app.run) return "";
+  const stateOf = stepStates();
+  const enter = app.run.done.length === 0;
+  // The signer step runs only for a new signer, so it shows only when it happens.
+  return `<ol class="steps ${enter ? "enter" : ""}">${STEPS.map(([id, text], index) => {
+    const state = stateOf(id);
+    const hidden = id === "signer" && state !== "done";
+    return `<li data-step="${id}" class="${state}" style="--i:${index}" ${hidden ? "hidden" : ""}><span class="mark"><span class="dot"></span>${icon("check")}</span><span>${esc(text)}<span class="sr-only">${state === "done" ? " Done." : ""}</span></span></li>`;
+  }).join("")}</ol>`;
+}
+
+// Changes the rows in place, so that each tick animates and the running animations do not restart.
+function updateSteps() {
+  const rows = document.querySelectorAll("#steps li[data-step]");
+  if (!rows.length || !app.run) return;
+  const stateOf = stepStates();
+  rows.forEach((row) => {
+    const id = row.dataset.step;
+    const state = stateOf(id);
+    row.className = state;
+    if (id === "signer") row.hidden = state !== "done";
+    row.querySelector(".sr-only").textContent = state === "done" ? " Done." : "";
+  });
 }
 
 function insurerHtml(data, { arrive }) {
@@ -360,7 +382,7 @@ function countUp() {
   requestAnimationFrame(tick);
 }
 
-function render({ arrive = false, count = false, focus = false } = {}) {
+function render({ arrive = false, landed = false, count = false, focus = false } = {}) {
   // The link keeps the chosen member, so that a reload shows the same ticket.
   views.querySelector('[data-view="member"]').setAttribute("href", `#member/${app.name}`);
   document.title = app.view === "insurer" ? "Insurer · Good Week" : `Member ${app.name} · Good Week`;
@@ -373,7 +395,7 @@ function render({ arrive = false, count = false, focus = false } = {}) {
       ? `<div class="loading"><div><p class="alert" role="alert">Could not read the results. ${esc(app.loadError)}</p><p><button type="button" class="link" data-action="reload">Try again</button></p></div></div>`
       : `<div class="loading"><p class="lab" role="status">Reading the results</p></div>`;
   } else if (app.view === "member") {
-    main.innerHTML = memberHtml(app.members[app.name], { arrive });
+    main.innerHTML = memberHtml(app.members[app.name], { arrive, landed });
   } else {
     main.innerHTML = insurerHtml(app.insurer, { arrive });
   }
@@ -412,19 +434,28 @@ async function runClaim() {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `HTTP ${res.status}`);
     }
+    let shown = Promise.resolve();
+    const run = app.run;
+    const pause = (ms) => (reducedMotion.matches ? null : new Promise((resolve) => setTimeout(resolve, ms)));
     await readEvents(res, (event) => {
       if (event.type === "step") {
-        app.run.done.push(event.step);
-        const steps = document.getElementById("steps");
-        if (steps) steps.innerHTML = stepsHtml();
+        shown = shown.then(() => {
+          if (app.run !== run) return null;
+          run.done.push(event.step);
+          updateSteps();
+          return pause(STEP_GAP_MS);
+        });
       }
       if (event.type === "error") throw new Error(event.message);
       if (event.type === "done" && event.session) app.session[name] = event.session;
     });
+    await shown;
+    await pause(STEP_SETTLE_MS);
     await loadAll();
     app.justRan.add(name);
     app.run = null;
-    render({ arrive: true, count: true });
+    // The ticket is already on the member screen, so only its new values land. The insurer screen brings in its rows.
+    render({ arrive: app.view !== "member", landed: app.view === "member", count: true });
     announce(`Claim finished. Rebate: ${rebateText(app.members[name])}.`);
     main.querySelector('[data-action="claim"]')?.focus({ preventScroll: true });
   } catch (error) {
