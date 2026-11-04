@@ -17,7 +17,7 @@ The owner chose: "I run emil-design-eng on the claim steps and the arriving resu
 
 - The change covers the claim steps and the arriving result only.
 - The claim logic does not change.
-- The owner reviews the PR before production.
+- The owner reviews the PR before production. The owner chose in case c_6b39de81-f941-420a-8754-cb89a4060a94: "Approve. Merge PR 6, deploy to production, and run one real claim to check it."
 
 ## Ruled out
 
@@ -34,3 +34,5 @@ none
 ## Sources
 
 - Case c_6a1c4543-f0e0-4988-98d8-59b599426153.
+- Case c_6b39de81-f941-420a-8754-cb89a4060a94.
+- PR 6.
