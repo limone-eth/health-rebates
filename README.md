@@ -68,7 +68,7 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 - A response signature proves that the TEE gave an answer. It does not prove which prompt the TEE got. See [docs/spike-day-1.md](docs/spike-day-1.md).
 - The insurer does not see the wearable data, but some results are public. Testnet transaction arguments are public, so each member's `days_met`, pattern result, model response and `request_hash` are public, under a pseudonymous account. A later fix: return only `eligible` or `hold`.
 - For the demo, one server holds the member, insurer and wearable keys. A real service keeps them apart.
-- The hosted copy has no login. Anyone with the link can use its live claims, up to the cap. Two claims that start at the same time can pass the cap by a few. A claim that fails does not count, but its model calls still cost money, so the NEAR AI key needs its own spend limit.
+- The hosted copy has no login. Anyone with the link can use its live claims, up to the cap. Two claims that start at the same time can pass the cap by a few. A claim that fails does not count, but its model calls still cost money.
 - Each hosted claim stays on the chain, so the pool's totals and balance change. The results that visitors see first stay the same.
 - Each live claim uses a new account, so one member can claim one week more than once. A real service links one NEAR account to each member.
 - Synthetic data only. Testnet only. A simulated insurer.

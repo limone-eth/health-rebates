@@ -155,8 +155,9 @@ From [the record](decisions/2026-11-04-hosted-live-claims.md): "Anyone with the 
 - [x] A hosted claim returns its result to the page, and the shared state does not change. A test checks this. A real claim through the hosted handler on one machine gave A paid.
 - [x] Approve and Decline stay off on the host. Requests from another site get a 403. A test checks both.
 - [x] The upload list is still an allow-list, and it names no key file. A test checks this.
-- [ ] The owner sets the cap, and adds the keys with `node chain/add-hosted-keys.mjs <preview|production> <cap>`.
-- [ ] The pool holds enough tokens for the cap.
+- [x] The cap is 65 ([record](decisions/2026-11-04-claim-cap-and-key.md): "The CLAIM_CAP value is 65").
+- [x] The pool holds enough tokens for the cap. The agent moved 3 NEAR to it.
+- [ ] The owner adds the keys with `node chain/add-hosted-keys.mjs <preview|production> 65`.
 - [ ] Real claims pass on a preview URL, and on the production URL.
 
 ## 9f. Release for the judges
