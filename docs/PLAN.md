@@ -19,7 +19,7 @@ Submit by 14 Nov 2026, 23:59 UTC.
 | Date | Work | Done when |
 |---|---|---|
 | 4 Nov | Spike: completion, attestation, signature, contract check. Go or no-go. | A script prints a verified completion. Written result in [spike-day-1.md](spike-day-1.md). |
-| 5 Nov | Mock wearable service, synthetic week for A, B, C | A fetch returns 7 days per member |
+| 5 Nov | Mock wearable service in the shape of the Open Wearables API, synthetic week for A, B, C | A fetch returns 7 days per member |
 | 6–7 Nov | TEE check: prompt, structured output, baseline check, explanation | A, B, C give the expected results 5 times in a row |
 | 10–11 Nov | Contract: fund pool, publish rule, register signers, claim, pay; tests | Testnet payouts match A, B, C |
 | 12 Nov | Web app: member screen, insurer screen, "Verified" panel | The demo runs end to end from the README |

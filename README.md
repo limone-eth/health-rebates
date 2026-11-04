@@ -24,6 +24,17 @@ cd spike && npm install && npm run verify
 
 You see: one structured completion, the checks on its response signature, and the checks on the attestation, with the Intel signature on each quote.
 
+Mock wearable service. Needs Node only, no API key:
+
+```sh
+cd wearable && npm test && npm start
+curl http://localhost:8787/mock/members
+```
+
+You see: all tests pass, then synthetic members A, B and C. Each member has 28 baseline days and a 7-day claim week (2 to 8 Nov 2026). To read a member, send the `X-Open-Wearables-API-Key: demo-key` header to `/api/v1/users/<id>/summaries/activity?start_date=2026-11-02&end_date=2026-11-08`. The `sleep` path works the same way.
+
+The service copies the API shape of [Open Wearables](https://github.com/the-momentum/open-wearables) (MIT): the paths, the header and the activity and sleep summary schemas. It holds no Open Wearables code. A real instance can replace it, which brings Garmin, Oura, Whoop and other devices. We have not tried this.
+
 ## NEAR tools used
 
 - NEAR AI Cloud: model inference in a TEE, attestation, response signatures.

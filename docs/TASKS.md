@@ -39,6 +39,15 @@ From: "a claim needs two signatures."
 - [ ] The claim response holds the result only. The contract rejects a body with `reasoning_content`.
 - [ ] The same checks pass on NEAR testnet, not only in the mock runtime.
 
-## 4. Remaining plan
+## 4. Mock wearable service (done)
 
-See the table in [PLAN.md](PLAN.md): mock wearable service, TEE check, contract, web app, README and video.
+From PLAN.md: "A fetch returns 7 days per member".
+
+- [x] `npm test` in `wearable/` passes.
+- [x] A meets the rule on 6 days, B on 3 days, C on 6 days.
+- [x] Only C's claim week differs from the member's own baseline.
+- [x] The activity and sleep responses match the Open Wearables OpenAPI schema (a one-time check, not in the tests).
+
+## 5. Remaining plan
+
+See the table in [PLAN.md](PLAN.md): TEE check, contract, web app, README and video.
