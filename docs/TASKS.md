@@ -157,8 +157,9 @@ From [the record](decisions/2026-11-04-hosted-live-claims.md): "Anyone with the 
 - [x] The upload list is still an allow-list, and it names no key file. A test checks this.
 - [x] The cap is 65 ([record](decisions/2026-11-04-claim-cap-and-key.md): "The CLAIM_CAP value is 65").
 - [x] The pool holds enough tokens for the cap. The agent moved 3 NEAR to it.
-- [ ] The owner adds the keys with `node chain/add-hosted-keys.mjs <preview|production> 65`.
-- [ ] Real claims pass on a preview URL, and on the production URL.
+- [x] The owner adds the keys with `node chain/add-hosted-keys.mjs <preview|production> 65`.
+- [x] Real claims pass on a preview URL: A paid, B not paid, C held, in 11 to 13 seconds each. The steps arrive one at a time.
+- [ ] A real claim passes on the production URL.
 
 ## 9f. Release for the judges
 
