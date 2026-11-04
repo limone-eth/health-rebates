@@ -25,7 +25,7 @@ The owner chose: "I add a permission rule for production deploys. Then the agent
 
 ## Comments
 
-The agent tried the deploy once after this choice, and the check stopped it again. So the rule was not active at that time.
+The agent tried the deploy once after this choice, and the check stopped it again. So the rule was not active at that time. The owner then ran `vercel deploy --prod --yes` in the terminal. One real claim on the public page then gave B not paid, in 14 seconds.
 
 ## Open questions
 
