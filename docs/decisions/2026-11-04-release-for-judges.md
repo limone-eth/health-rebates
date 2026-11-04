@@ -2,6 +2,8 @@
 
 Decided: 2026-11-04 · Case: c_98ff9788-1b57-4238-892f-840dd176f338
 
+Changed by [the publish record](2026-11-04-publish-from-clean-main.md): the code goes public in a new repo, not in this one.
+
 ## Question and choice
 
 The repo was private, and main held only the first commit. So the judges could not read or clone the code.

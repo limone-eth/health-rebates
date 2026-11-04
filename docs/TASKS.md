@@ -145,11 +145,19 @@ The owner said: "let's use vercel anyways".
 
 ## 9f. Release for the judges
 
-From [the record](decisions/2026-11-04-release-for-judges.md): "I merge PRs 1 to 5 in order, then make the repo public."
+From [the record](decisions/2026-11-04-release-for-judges.md): "I merge PRs 1 to 5 in order". From [the publish record](decisions/2026-11-04-publish-from-clean-main.md): "Make a new public repo named health-rebates that holds only the clean main."
 
 - [x] The repo names no other brand.
-- [ ] PRs 1 to 5 are merged into main.
-- [ ] The repo is public, and a clone of main passes the tests with no login.
+- [x] PRs 1 to 5 are merged into main.
+- [x] The repo `health-rebates` is public, and it holds only main.
+- [x] A clone of main with no login passes the tests.
+- [ ] The owner deletes the first repo, after the two checks above pass.
+
+From [the hosted copy record](decisions/2026-11-04-hosted-copy-name.md): "Deploy the hosted copy under a new project named health-rebates."
+
+- [x] The project `health-rebates` is live, and it passes the checks in the record.
+- [x] The README links to the new URL.
+- [ ] The owner deletes the old Vercel project, after the two checks above pass.
 
 ## 10. Remaining plan
 
