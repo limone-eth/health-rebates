@@ -30,6 +30,9 @@ async function verifyReport(report, nonce) {
   if (Buffer.from(tdAttributes, "hex")[0] & 1) throw new Error("Quote is from a debug TD");
   if (reportData !== head.toString("hex") + nonce) throw new Error("Quote does not bind the signer and nonce");
   if (report.request_nonce !== nonce) throw new Error("Echoed nonce does not match");
+  if (report.report_data !== undefined && report.report_data !== reportData) {
+    throw new Error("Echoed report data does not match the quote");
+  }
   if (report.signing_algo !== SIGNING_ALGO) throw new Error(`Signing algorithm: ${report.signing_algo}`);
 }
 
@@ -81,6 +84,7 @@ export function createNearAi({ apiKey, model }) {
     }
     if (!signature?.signature) throw new Error("No signature");
     if (signature.signature_kind !== "provider_tee") throw new Error(`Signature kind: ${signature.signature_kind}`);
+    if (signature.signing_algo !== SIGNING_ALGO) throw new Error(`Signing algorithm: ${signature.signing_algo}`);
     if (signature.text !== `${model}:${sha256(requestBody)}:${sha256(responseBody)}`) {
       throw new Error("Signed text does not match our bytes");
     }

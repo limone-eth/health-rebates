@@ -1,0 +1,631 @@
+//! The rebate pool. A claim needs two signatures:
+//! - the wearable service signs (contract, member, week, request_hash): this is the member's real data;
+//! - a registered NEAR AI signer signs (model, request_hash, response_hash): the TEE model gave this answer.
+//!
+//! The insurer verifies the attestation off-chain, then registers the signer. A contract cannot check a TDX quote.
+//! Arguments of a testnet transaction are public: `days_met` and the pattern result are public, under the member's account.
+
+use near_sdk::serde_json::{self, Value};
+use near_sdk::store::{LookupMap, LookupSet};
+use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
+
+use crate::{recover_signer, sha256_hex};
+
+/// Kept in the pool for storage of new claim records.
+const STORAGE_RESERVE: NearToken = NearToken::from_millinear(100);
+
+#[derive(BorshStorageKey)]
+#[near(serializers = [borsh])]
+enum StorageKey {
+    Signers,
+    Claims,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[near(serializers = [borsh, json])]
+pub enum Outcome {
+    Paid,
+    NotPaid,
+    Held,
+    Rejected,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+#[near(serializers = [borsh, json])]
+pub struct ClaimRecord {
+    pub days_met: u8,
+    pub pattern_matches_owner: bool,
+    pub outcome: Outcome,
+    pub request_hash: String,
+}
+
+#[derive(Clone, Default, PartialEq, Debug)]
+#[near(serializers = [borsh, json])]
+pub struct Totals {
+    pub paid: u32,
+    pub not_paid: u32,
+    pub held: u32,
+    pub rejected: u32,
+}
+
+#[derive(Clone)]
+#[near(serializers = [json])]
+pub struct Config {
+    pub insurer: AccountId,
+    pub rule: String,
+    pub model: String,
+    pub min_days: u8,
+    pub total_days: u8,
+    pub rebate: NearToken,
+}
+
+#[near(contract_state)]
+#[derive(PanicOnDefault)]
+pub struct RebatePool {
+    insurer: AccountId,
+    wearable_signer: [u8; 20],
+    rule: String,
+    model: String,
+    min_days: u8,
+    total_days: u8,
+    rebate: NearToken,
+    signers: LookupSet<[u8; 20]>,
+    claims: LookupMap<String, ClaimRecord>,
+    totals: Totals,
+}
+
+/// Decodes hex of exactly N bytes, with or without "0x".
+fn parse_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    let text = text.strip_prefix("0x").unwrap_or(text).as_bytes();
+    if text.len() != N * 2 {
+        return None;
+    }
+    let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = [0u8; N];
+    for (i, pair) in text.chunks(2).enumerate() {
+        out[i] = digit(pair[0])? << 4 | digit(pair[1])?;
+    }
+    Some(out)
+}
+
+fn is_sha256_hex(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+fn claim_key(member: &AccountId, week: &str) -> String {
+    format!("{member}:{week}")
+}
+
+/// The exact text that the wearable service signs.
+fn wearable_text(contract: &AccountId, member: &AccountId, week: &str, request_hash: &str) -> String {
+    format!("rebate-claim:{contract}:{member}:{week}:{request_hash}")
+}
+
+/// Rejects a field that is not in `known`, unless its value is null.
+fn only_known_fields(value: &Value, known: &[&str]) -> Result<(), &'static str> {
+    let fields = value.as_object().ok_or("Response has a bad shape")?;
+    if fields.iter().any(|(key, field)| !field.is_null() && !known.contains(&key.as_str())) {
+        return Err("Response holds an unknown field");
+    }
+    Ok(())
+}
+
+/// Reads the result from the signed response. Accepts the result only, with no reasoning text.
+fn parse_response(body: &str, model: &str, total_days: u8) -> Result<(u8, bool), &'static str> {
+    let body: Value = serde_json::from_str(body).map_err(|_| "Response is not JSON")?;
+    if body["model"].as_str() != Some(model) {
+        return Err("Response is from another model");
+    }
+    let choices = body["choices"].as_array().ok_or("Response has no choices")?;
+    let [choice] = choices.as_slice() else {
+        return Err("Response must have one choice");
+    };
+    let message = &choice["message"];
+    // Any other field that holds a value can repeat health data, and the whole body goes on-chain.
+    only_known_fields(&body, &["id", "object", "choices", "model", "created", "usage"])?;
+    only_known_fields(choice, &["index", "message", "finish_reason", "logprobs", "matched_stop"])?;
+    for key in ["reasoning_content", "reasoning"] {
+        if !message[key].is_null() {
+            return Err("Response holds reasoning text");
+        }
+    }
+    only_known_fields(message, &["role", "content"])?;
+    let content = message["content"].as_str().ok_or("Response has no content")?;
+    let result: Value = serde_json::from_str(content).map_err(|_| "Result is not JSON")?;
+    let fields = result.as_object().ok_or("Result is not an object")?;
+    if fields.len() != 2 {
+        return Err("Result must hold days_met and pattern_matches_owner only");
+    }
+    let days_met = fields.get("days_met").and_then(Value::as_u64).ok_or("Bad days_met")?;
+    if days_met > total_days as u64 {
+        return Err("days_met is too large");
+    }
+    let pattern = fields.get("pattern_matches_owner").and_then(Value::as_bool).ok_or("Bad pattern_matches_owner")?;
+    Ok((days_met as u8, pattern))
+}
+
+fn fail(message: &str) -> ! {
+    env::panic_str(message)
+}
+
+#[near]
+impl RebatePool {
+    /// Only the pool account can call this, so nobody can set up the pool between the deploy and this call.
+    #[init]
+    #[private]
+    pub fn new(
+        insurer: AccountId,
+        wearable_signer: String,
+        rule: String,
+        model: String,
+        min_days: u8,
+        total_days: u8,
+        rebate: NearToken,
+    ) -> Self {
+        require!(min_days > 0 && min_days <= total_days, "Bad rule days");
+        Self {
+            insurer,
+            wearable_signer: parse_hex(&wearable_signer).unwrap_or_else(|| fail("Bad wearable signer")),
+            rule,
+            model,
+            min_days,
+            total_days,
+            rebate,
+            signers: LookupSet::new(StorageKey::Signers),
+            claims: LookupMap::new(StorageKey::Claims),
+            totals: Totals::default(),
+        }
+    }
+
+    /// Anyone can add funds to the pool.
+    #[payable]
+    pub fn fund(&mut self) {
+        require!(env::attached_deposit() > NearToken::from_yoctonear(0), "Attach a deposit");
+        env::log_str(&format!("Pool funded: {} by {}", env::attached_deposit(), env::predecessor_account_id()));
+    }
+
+    /// Call this after the attestation for this signer passes off-chain.
+    pub fn register_signer(&mut self, signer: String) {
+        self.only_insurer();
+        self.signers.insert(parse_hex(&signer).unwrap_or_else(|| fail("Bad signer")));
+    }
+
+    pub fn remove_signer(&mut self, signer: String) {
+        self.only_insurer();
+        self.signers.remove(&parse_hex::<20>(&signer).unwrap_or_else(|| fail("Bad signer")));
+    }
+
+    /// The caller is the member. Pays, refuses or holds the claim. Each member can claim each week one time.
+    pub fn claim(
+        &mut self,
+        week: String,
+        request_hash: String,
+        response_body: String,
+        ai_signature: String,
+        wearable_signature: String,
+    ) -> Outcome {
+        let member = env::predecessor_account_id();
+        let key = claim_key(&member, &week);
+        require!(!self.claims.contains_key(&key), "This week is already claimed");
+        require!(is_sha256_hex(&request_hash), "request_hash must be 64 lowercase hex characters");
+
+        let wearable: [u8; 65] = parse_hex(&wearable_signature).unwrap_or_else(|| fail("Bad wearable signature"));
+        let text = wearable_text(&env::current_account_id(), &member, &week, &request_hash);
+        require!(
+            recover_signer(text.as_bytes(), &wearable) == Some(self.wearable_signer),
+            "The wearable service did not sign this claim"
+        );
+
+        // The text holds the published model, so a signature for another model does not recover a registered signer.
+        let ai: [u8; 65] = parse_hex(&ai_signature).unwrap_or_else(|| fail("Bad NEAR AI signature"));
+        let text = format!("{}:{request_hash}:{}", self.model, sha256_hex(response_body.as_bytes()));
+        let signer = recover_signer(text.as_bytes(), &ai).unwrap_or_else(|| fail("Bad NEAR AI signature"));
+        require!(self.signers.contains(&signer), "The NEAR AI signer is not registered");
+
+        let (days_met, pattern_matches_owner) =
+            parse_response(&response_body, &self.model, self.total_days).unwrap_or_else(|message| fail(message));
+
+        let outcome = if days_met < self.min_days {
+            self.totals.not_paid += 1;
+            Outcome::NotPaid
+        } else if !pattern_matches_owner {
+            self.totals.held += 1;
+            Outcome::Held
+        } else {
+            self.pay(&member);
+            self.totals.paid += 1;
+            Outcome::Paid
+        };
+        self.claims.insert(key, ClaimRecord { days_met, pattern_matches_owner, outcome, request_hash });
+        env::log_str(&format!("Claim {member} {week}: {outcome:?}"));
+        outcome
+    }
+
+    /// The insurer's decision on a held claim.
+    pub fn resolve_held(&mut self, member: AccountId, week: String, approve: bool) -> Outcome {
+        self.only_insurer();
+        let key = claim_key(&member, &week);
+        let mut record = self.claims.get(&key).cloned().unwrap_or_else(|| fail("No such claim"));
+        require!(record.outcome == Outcome::Held, "This claim is not held");
+        self.totals.held -= 1;
+        if approve {
+            self.pay(&member);
+            self.totals.paid += 1;
+            record.outcome = Outcome::Paid;
+        } else {
+            self.totals.rejected += 1;
+            record.outcome = Outcome::Rejected;
+        }
+        let outcome = record.outcome;
+        self.claims.insert(key, record);
+        outcome
+    }
+
+    pub fn get_claim(&self, member: AccountId, week: String) -> Option<ClaimRecord> {
+        self.claims.get(&claim_key(&member, &week)).cloned()
+    }
+
+    pub fn get_totals(&self) -> Totals {
+        self.totals.clone()
+    }
+
+    pub fn get_config(&self) -> Config {
+        Config {
+            insurer: self.insurer.clone(),
+            rule: self.rule.clone(),
+            model: self.model.clone(),
+            min_days: self.min_days,
+            total_days: self.total_days,
+            rebate: self.rebate,
+        }
+    }
+
+    pub fn is_registered_signer(&self, signer: String) -> bool {
+        parse_hex::<20>(&signer).is_some_and(|signer| self.signers.contains(&signer))
+    }
+}
+
+impl RebatePool {
+    fn only_insurer(&self) {
+        require!(env::predecessor_account_id() == self.insurer, "Only the insurer can do this");
+    }
+
+    /// The claim fails before it is recorded if the pool cannot pay, so the member can try again.
+    fn pay(&self, member: &AccountId) {
+        let storage = env::storage_byte_cost().saturating_mul(env::storage_usage() as u128);
+        let needed = self.rebate.saturating_add(storage).saturating_add(STORAGE_RESERVE);
+        require!(env::account_balance() >= needed, "The pool does not have enough funds");
+        let _ = Promise::new(member.clone()).transfer(self.rebate);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{address, key, sign};
+    use k256::ecdsa::SigningKey;
+    use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
+    use near_sdk::testing_env;
+
+    const MODEL: &str = "test/model";
+    const WEEK: &str = "2026-11-02";
+    const HASH: &str = "abababababababababababababababababababababababababababababababab";
+    const REBATE: NearToken = NearToken::from_near(1);
+
+    fn account(name: &str) -> AccountId {
+        name.parse().unwrap()
+    }
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    fn wearable_key() -> SigningKey {
+        key(1)
+    }
+    fn ai_key() -> SigningKey {
+        key(2)
+    }
+
+    fn context(caller: &str, balance: NearToken) {
+        testing_env!(VMContextBuilder::new()
+            .current_account_id(account("pool.testnet"))
+            .predecessor_account_id(account(caller))
+            .account_balance(balance)
+            .build());
+    }
+
+    fn pool() -> RebatePool {
+        context("pool.testnet", NearToken::from_near(10));
+        let mut pool = RebatePool::new(
+            account("insurer.testnet"),
+            hex(&address(&wearable_key())),
+            "7000 steps".to_string(),
+            MODEL.to_string(),
+            5,
+            7,
+            REBATE,
+        );
+        context("insurer.testnet", NearToken::from_near(10));
+        pool.register_signer(hex(&address(&ai_key())));
+        pool
+    }
+
+    fn body(content: &str) -> String {
+        serde_json::json!({ "model": MODEL, "choices": [{ "message": { "role": "assistant", "content": content } }] })
+            .to_string()
+    }
+    fn result(days: u8, pattern: bool) -> String {
+        body(&format!(r#"{{"days_met":{days},"pattern_matches_owner":{pattern}}}"#))
+    }
+
+    fn ai_sign(signer: &SigningKey, model: &str, response: &str) -> String {
+        hex(&sign(signer, &format!("{model}:{HASH}:{}", sha256_hex(response.as_bytes()))))
+    }
+    fn wearable_sign(signer: &SigningKey, member: &str) -> String {
+        hex(&sign(signer, &wearable_text(&account("pool.testnet"), &account(member), WEEK, HASH)))
+    }
+
+    /// A claim by `member`, with good signatures.
+    fn claim(pool: &mut RebatePool, member: &str, response: &str) -> Outcome {
+        context(member, NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.to_string(),
+            ai_sign(&ai_key(), MODEL, response),
+            wearable_sign(&wearable_key(), member),
+        )
+    }
+
+    #[test]
+    fn pays_a_member_who_meets_the_rule_and_the_pattern() {
+        let mut pool = pool();
+        assert_eq!(claim(&mut pool, "a.testnet", &result(6, true)), Outcome::Paid);
+        let record = pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap();
+        assert_eq!((record.days_met, record.pattern_matches_owner), (6, true));
+        assert_eq!(pool.get_totals(), Totals { paid: 1, ..Totals::default() });
+        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("a.testnet")).count(), 1);
+    }
+
+    #[test]
+    fn does_not_pay_a_member_who_misses_the_rule() {
+        let mut pool = pool();
+        assert_eq!(claim(&mut pool, "b.testnet", &result(3, true)), Outcome::NotPaid);
+        assert_eq!(pool.get_totals(), Totals { not_paid: 1, ..Totals::default() });
+        assert!(get_created_receipts().is_empty());
+    }
+
+    #[test]
+    fn holds_a_member_whose_pattern_does_not_match() {
+        let mut pool = pool();
+        assert_eq!(claim(&mut pool, "c.testnet", &result(6, false)), Outcome::Held);
+        assert_eq!(pool.get_totals(), Totals { held: 1, ..Totals::default() });
+        assert!(get_created_receipts().is_empty());
+    }
+
+    #[test]
+    fn the_rule_limit_is_exact() {
+        let mut pool = pool();
+        assert_eq!(claim(&mut pool, "a.testnet", &result(5, true)), Outcome::Paid);
+        assert_eq!(claim(&mut pool, "b.testnet", &result(4, true)), Outcome::NotPaid);
+    }
+
+    #[test]
+    #[should_panic(expected = "already claimed")]
+    fn rejects_a_second_claim_for_the_same_week() {
+        let mut pool = pool();
+        claim(&mut pool, "a.testnet", &result(6, true));
+        claim(&mut pool, "a.testnet", &result(6, true));
+    }
+
+    #[test]
+    #[should_panic(expected = "wearable service did not sign")]
+    fn rejects_a_wearable_signature_from_another_key() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.clone(),
+            ai_sign(&ai_key(), MODEL, &response),
+            wearable_sign(&key(9), "a.testnet"),
+        );
+    }
+
+    /// B cannot use the data that the wearable service signed for A.
+    #[test]
+    #[should_panic(expected = "wearable service did not sign")]
+    fn rejects_a_wearable_signature_for_another_member() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("b.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.clone(),
+            ai_sign(&ai_key(), MODEL, &response),
+            wearable_sign(&wearable_key(), "a.testnet"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "signer is not registered")]
+    fn rejects_a_near_ai_signer_that_is_not_registered() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.clone(),
+            ai_sign(&key(9), MODEL, &response),
+            wearable_sign(&wearable_key(), "a.testnet"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "signer is not registered")]
+    fn rejects_a_signer_after_the_insurer_removes_it() {
+        let mut pool = pool();
+        pool.remove_signer(hex(&address(&ai_key())));
+        claim(&mut pool, "a.testnet", &result(6, true));
+    }
+
+    /// A signature for a changed body recovers another address, which is not registered.
+    #[test]
+    #[should_panic(expected = "signer is not registered")]
+    fn rejects_a_changed_response() {
+        let mut pool = pool();
+        context("b.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            result(7, true),
+            ai_sign(&ai_key(), MODEL, &result(3, true)),
+            wearable_sign(&wearable_key(), "b.testnet"),
+        );
+    }
+
+    /// The signature covers another model's name, so it does not recover the registered signer.
+    #[test]
+    #[should_panic(expected = "signer is not registered")]
+    fn rejects_a_signature_for_a_model_that_the_insurer_did_not_publish() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.clone(),
+            ai_sign(&ai_key(), "other/model", &response),
+            wearable_sign(&wearable_key(), "a.testnet"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "64 lowercase hex")]
+    fn rejects_a_request_hash_that_is_not_64_hex_characters() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim(
+            WEEK.to_string(),
+            "abc".to_string(),
+            response.clone(),
+            ai_sign(&ai_key(), MODEL, &response),
+            wearable_sign(&wearable_key(), "a.testnet"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "reasoning text")]
+    fn rejects_a_body_with_reasoning_text() {
+        let mut pool = pool();
+        let response = serde_json::json!({ "model": MODEL, "choices": [{ "message": {
+            "content": r#"{"days_met":6,"pattern_matches_owner":true}"#,
+            "reasoning_content": "Resting heart rate was 54",
+        } }] })
+        .to_string();
+        claim(&mut pool, "a.testnet", &response);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown field")]
+    fn rejects_another_message_field_that_holds_text() {
+        let mut pool = pool();
+        let response = serde_json::json!({ "model": MODEL, "choices": [{ "message": {
+            "content": r#"{"days_met":6,"pattern_matches_owner":true}"#,
+            "thinking": "Resting heart rate was 54",
+        } }] })
+        .to_string();
+        claim(&mut pool, "a.testnet", &response);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown field")]
+    fn rejects_an_unknown_top_level_field() {
+        let mut pool = pool();
+        let response = serde_json::json!({ "model": MODEL, "extra": "Resting heart rate was 54", "choices": [{ "message": {
+            "content": r#"{"days_met":6,"pattern_matches_owner":true}"#,
+        } }] })
+        .to_string();
+        claim(&mut pool, "a.testnet", &response);
+    }
+
+    #[test]
+    fn accepts_a_null_optional_field() {
+        let mut pool = pool();
+        let response = serde_json::json!({ "model": MODEL, "system_fingerprint": null, "choices": [{ "message": {
+            "content": r#"{"days_met":6,"pattern_matches_owner":true}"#,
+            "tool_calls": null,
+        } }] })
+        .to_string();
+        assert_eq!(claim(&mut pool, "a.testnet", &response), Outcome::Paid);
+    }
+
+    #[test]
+    #[should_panic(expected = "days_met and pattern_matches_owner only")]
+    fn rejects_a_result_with_extra_fields() {
+        let mut pool = pool();
+        claim(&mut pool, "a.testnet", &body(r#"{"days_met":6,"pattern_matches_owner":true,"note":"x"}"#));
+    }
+
+    #[test]
+    #[should_panic(expected = "days_met is too large")]
+    fn rejects_days_met_above_the_week() {
+        let mut pool = pool();
+        claim(&mut pool, "a.testnet", &result(8, true));
+    }
+
+    #[test]
+    #[should_panic(expected = "enough funds")]
+    fn fails_if_the_pool_cannot_pay() {
+        let mut pool = pool();
+        let response = result(6, true);
+        context("a.testnet", NearToken::from_millinear(500));
+        pool.claim(
+            WEEK.to_string(),
+            HASH.to_string(),
+            response.clone(),
+            ai_sign(&ai_key(), MODEL, &response),
+            wearable_sign(&wearable_key(), "a.testnet"),
+        );
+    }
+
+    #[test]
+    fn the_insurer_can_approve_or_reject_a_held_claim() {
+        let mut pool = pool();
+        claim(&mut pool, "c.testnet", &result(6, false));
+        claim(&mut pool, "d.testnet", &result(6, false));
+        context("insurer.testnet", NearToken::from_near(10));
+        assert_eq!(pool.resolve_held(account("c.testnet"), WEEK.to_string(), true), Outcome::Paid);
+        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("c.testnet")).count(), 1);
+        assert_eq!(pool.resolve_held(account("d.testnet"), WEEK.to_string(), false), Outcome::Rejected);
+        assert_eq!(pool.get_totals(), Totals { paid: 1, rejected: 1, ..Totals::default() });
+    }
+
+    #[test]
+    #[should_panic(expected = "not held")]
+    fn a_paid_claim_cannot_be_paid_again() {
+        let mut pool = pool();
+        claim(&mut pool, "a.testnet", &result(6, true));
+        context("insurer.testnet", NearToken::from_near(10));
+        pool.resolve_held(account("a.testnet"), WEEK.to_string(), true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the insurer")]
+    fn only_the_insurer_can_resolve_a_held_claim() {
+        let mut pool = pool();
+        claim(&mut pool, "c.testnet", &result(6, false));
+        pool.resolve_held(account("c.testnet"), WEEK.to_string(), true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the insurer")]
+    fn only_the_insurer_can_register_a_signer() {
+        let mut pool = pool();
+        context("a.testnet", NearToken::from_near(10));
+        pool.register_signer(hex(&address(&key(9))));
+    }
+}

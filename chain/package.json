@@ -1,0 +1,12 @@
+{
+  "name": "chain-run",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run-testnet": "node --env-file=../.env run-testnet.mjs"
+  },
+  "dependencies": {
+    "near-api-js": "7.4.0",
+    "viem": "2.21.0"
+  }
+}

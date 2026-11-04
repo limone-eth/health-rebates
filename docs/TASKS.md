@@ -28,16 +28,25 @@ From: "A genuine TDX machine holds the key, but we do not check its software."
 - [ ] The script checks the GPU evidence.
 - [ ] If this does not fit in the time, the README says so as a limit.
 
-## 3. Build the claim with two signatures
+## 3. Build the claim with two signatures (done)
 
 From: "a claim needs two signatures."
 
-- [ ] The contract rejects a claim with no wearable service signature.
-- [ ] The contract rejects a claim with a NEAR AI signature from a signer that is not registered.
-- [ ] The contract rejects a second claim for the same member and week.
-- [ ] The contract rejects a `model` that the insurer did not publish, and a `request_hash` that is not 64 hex characters.
-- [ ] The claim response holds the result only. The contract rejects a body with `reasoning_content`.
-- [ ] The same checks pass on NEAR testnet, not only in the mock runtime.
+- [x] The contract rejects a claim with no wearable service signature.
+- [x] The contract rejects a claim with a NEAR AI signature from a signer that is not registered.
+- [x] The contract rejects a second claim for the same member and week.
+- [x] The contract rejects a `model` that the insurer did not publish, and a `request_hash` that is not 64 hex characters.
+- [x] The claim response holds the result only. The contract rejects a body with `reasoning_content`.
+- [x] The same checks pass on NEAR testnet, not only in the mock runtime.
+
+## 3b. Run the contract on testnet with a dev account (done)
+
+From [decisions/2026-11-03-testnet-account.md](decisions/2026-11-03-testnet-account.md): "I create a new testnet account only for this project. Its key stays in a local file that git ignores."
+
+- [x] A new testnet account exists only for this project, with free testnet tokens only.
+- [x] Each key is in a file that git ignores. The script output does not show a key.
+- [x] The contract deploys, the pool is funded, and the signer is registered after the attestation passes.
+- [x] Real TEE claims on testnet give the expected payouts: A paid, B not paid, C held. See [testnet-run.md](testnet-run.md).
 
 ## 4. Mock wearable service (done)
 

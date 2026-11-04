@@ -4,7 +4,7 @@ An insurer pays health rebates for healthy weeks, and never sees the member's he
 
 Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Private AI, Real-World Money).
 
-**Status: in progress.** The spike, the mock wearable service and the TEE check run. The contract flow and the web app do not exist yet. See [docs/PLAN.md](docs/PLAN.md).
+**Status: in progress.** The spike, the mock wearable service, the TEE check and the testnet contract run from scripts. The web app does not exist yet. See [docs/PLAN.md](docs/PLAN.md).
 
 ## What runs today
 
@@ -43,6 +43,8 @@ cd tee && npm install && npm test && npm run check
 
 You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md).
 
+Testnet run. It deploys the rebate pool, then sends real TEE claims. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
+
 ## NEAR tools used
 
 - NEAR AI Cloud: model inference in a TEE, attestation, response signatures.
@@ -53,6 +55,7 @@ You see: all tests pass, then 5 runs of A, B and C, each with a verified signatu
 - NEAR AI Cloud runs the model in a TEE, not our code. A small service fetches the wearable data outside the TEE. The insurer never sees the data, but it trusts that service.
 - The TEE does not apply the rebate rule. Code outside the TEE marks each day, and the model counts the marks and does the pattern check. See [docs/tee-check.md](docs/tee-check.md).
 - A response signature proves that the TEE gave an answer. It does not prove which prompt the TEE got. See [docs/spike-day-1.md](docs/spike-day-1.md).
+- The insurer does not see the wearable data, but some results are public. Testnet transaction arguments are public, so each member's `days_met`, pattern result, model response and `request_hash` are public, under a pseudonymous account. A later fix: return only `eligible` or `hold`.
 - Synthetic data only. Testnet only. A simulated insurer.
 
 ## Baseline

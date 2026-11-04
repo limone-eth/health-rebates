@@ -1,10 +1,12 @@
-//! Day 1 spike: can a NEAR contract check a NEAR AI Cloud response signature?
+//! Signature checks for the rebate pool, and the pool itself (see `pool`).
 //!
 //! NEAR AI Cloud `ecdsa` signatures are Ethereum EIP-191 signatures over the text
 //! `<model>:<request_hash>:<response_hash>` (provider TEE) or
 //! `<request_hash>:<response_hash>` (gateway). Each hash is a SHA-256 of the exact body bytes.
 
 use near_sdk::env;
+
+pub mod pool;
 
 /// keccak256("\x19Ethereum Signed Message:\n" + len(text) + text)
 pub fn eip191_hash(text: &[u8]) -> Vec<u8> {
@@ -46,7 +48,7 @@ pub fn verify_provider_response(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use k256::ecdsa::SigningKey;
     use near_sdk::test_utils::VMContextBuilder;
@@ -57,17 +59,17 @@ mod tests {
     const REQUEST_HASH: &str = "abababababababababababababababababababababababababababababababab";
     const BODY: &[u8] = br#"{"choices":[{"message":{"content":"{\"days_met\":5}"}}]}"#;
 
-    fn key(seed: u8) -> SigningKey {
+    pub(crate) fn key(seed: u8) -> SigningKey {
         SigningKey::from_slice(&[seed; 32]).unwrap()
     }
 
-    fn address(key: &SigningKey) -> [u8; 20] {
+    pub(crate) fn address(key: &SigningKey) -> [u8; 20] {
         let point = key.verifying_key().to_encoded_point(false);
         Keccak256::digest(&point.as_bytes()[1..])[12..].try_into().unwrap()
     }
 
     /// Signs the way an Ethereum wallet does, outside the NEAR runtime.
-    fn sign(key: &SigningKey, text: &str) -> [u8; 65] {
+    pub(crate) fn sign(key: &SigningKey, text: &str) -> [u8; 65] {
         let mut message = format!("\x19Ethereum Signed Message:\n{}", text.len()).into_bytes();
         message.extend_from_slice(text.as_bytes());
         let digest = Keccak256::digest(&message);

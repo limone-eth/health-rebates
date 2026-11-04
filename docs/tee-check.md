@@ -16,12 +16,12 @@ The first version asked the model to apply the three limits. It failed on the fi
 
 Now `wearable/rule.mjs` sets `meets_rule` on each row, and the model counts these marks. **So the TEE does not apply the rule. The code outside the TEE does.** The model does the pattern check and writes the explanation.
 
-The insurer already trusts this service for the data. The wearable service signature in the claim design covers the request hash, so it also covers the marks. Do not say "the TEE checks the rule" in the README, the video or the form.
+The insurer already trusts this service for the data. In the claim design, the wearable service signs the request hash. This protects the marks only if the service builds the request itself and signs only that request. **The current script does not do this: it signs the hash of the request that the script built.** If a service signs any hash, a member can send many requests and claim with the best one. Do not say "the TEE checks the rule" in the README, the video or the form.
 
 ## Limits of this result
 
 - 5 runs on one fixed data set, at `temperature: 0`. It does not measure accuracy on other data.
 - The members are far apart. C's week is outside the baseline on 7 of 7 days, and A's on 0 of 7. Nothing tests a case near the limit of the pattern check.
 - Simple code can also do this pattern check. The test in `tee/claim.test.mjs` counts the same thing without a model. The model is not needed for this data.
-- The check for the explanation is small: it is not empty, and it holds the day count. The run prints the first run's explanations for a person to read.
+- The check for the explanation is small: it is not empty, and it holds the day count. Its signature is not checked. The run prints the first run's explanations for a person to read.
 - The software in the TEE is still not checked. See task 2b.
