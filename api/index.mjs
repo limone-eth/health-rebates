@@ -24,6 +24,10 @@ const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url
 const app = await createApp({
   hosted: true,
   members: readJson("../web/members.json"),
+  trackers: {
+    whoop: { clientId: process.env.WHOOP_CLIENT_ID, clientSecret: process.env.WHOOP_CLIENT_SECRET },
+    oura: { clientId: process.env.OURA_CLIENT_ID, clientSecret: process.env.OURA_CLIENT_SECRET },
+  },
   ...(await hostedLive(readJson("../web/state.json").pool)),
 });
 

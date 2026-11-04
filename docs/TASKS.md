@@ -180,7 +180,19 @@ From [the record](decisions/2026-11-04-own-data.md): "Let judges upload a CSV or
 - [x] Before the run, the screen says what the server sees, what stays public, and that an upload has no wearable proof. The Verified panel says this too.
 - [x] A real upload passes on a preview URL: paid, in 11 seconds. A bad file gets a 422.
 - [ ] A real upload passes on the production URL.
-- [ ] A tracker connection. It needs a real Open Wearables instance and accounts with device makers.
+
+## 9e5. Claims from a connected tracker
+
+From [the record](decisions/2026-11-04-tracker-setup.md): "Connect the app to each device maker by OAuth, on Vercel, with no Open Wearables instance."
+
+- [x] Whoop data maps to the claim rows. A test with Whoop's documented shapes checks this. From: "Build Whoop and Oura."
+- [x] Oura data maps to the claim rows. A test with Oura's documented shapes checks this. From: "Build Whoop and Oura."
+- [ ] A visitor connects by OAuth and a real claim runs. The state value is checked. From: "Connect the app to each device maker by OAuth".
+- [x] The server keeps no tracker data and no token. A test checks this. From: "The server keeps no tracker data and no tracker token after the claim."
+- [x] Fewer than 14 days gives a clear error, and the CSV stays available. A test checks this. From: "A connection with fewer than 14 days gets a clear error".
+- [x] The Verified panel says what the second signature proves for tracker data. From: "The Verified panel says what the second signature proves".
+- [ ] The owner creates the Whoop and Oura apps, and adds the keys. From: "The owner creates each developer app and adds its keys."
+- [ ] A real connection passes on the production URL, for each device that the owner has.
 
 ## 9f. Release for the judges
 

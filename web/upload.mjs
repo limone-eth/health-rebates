@@ -28,12 +28,17 @@ const isDate = (text) => {
 function readLine(cells, line) {
   if (cells.length !== COLUMNS.length) throw new UploadError(`Line ${line}: expected ${COLUMNS.length} columns.`);
   const row = Object.fromEntries(COLUMNS.map((name, index) => [name, cells[index].trim()]));
-  if (!isDate(row.date)) throw new UploadError(`Line ${line}: date must be YYYY-MM-DD.`);
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(row.bedtime)) throw new UploadError(`Line ${line}: bedtime must be HH:MM.`);
+  return checkDay(row, `Line ${line}`);
+}
+
+function checkDay(day, where) {
+  const row = { ...day };
+  if (!isDate(row.date)) throw new UploadError(`${where}: date must be YYYY-MM-DD.`);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(row.bedtime)) throw new UploadError(`${where}: bedtime must be HH:MM.`);
   for (const [name, [min, max]] of Object.entries(LIMITS)) {
     const value = Number(row[name]);
-    if (row[name] === "" || !Number.isFinite(value) || value < min || value > max) {
-      throw new UploadError(`Line ${line}: ${name} must be a number from ${min} to ${max}.`);
+    if (row[name] == null || row[name] === "" || !Number.isFinite(value) || value < min || value > max) {
+      throw new UploadError(`${where}: ${name} must be a number from ${min} to ${max}.`);
     }
     row[name] = value;
   }
@@ -69,12 +74,26 @@ export function parseUpload(text) {
     .map((content, index) => ({ content, line: index + 1 }))
     .slice(1)
     .filter(({ content }) => content.trim() !== "")
-    .map(({ content, line }) => readLine(content.split(","), line))
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .map(({ content, line }) => readLine(content.split(","), line));
+  return fromDays(days);
+}
 
+// A device maker can leave a field empty on some days. Such a day is dropped, and the rest must still pass.
+export function uploadFromTracker(days) {
+  return fromDays(days.flatMap((day) => {
+    try {
+      return [checkDay(day, day.date)];
+    } catch {
+      return [];
+    }
+  }));
+}
+
+function fromDays(unsorted) {
+  const days = [...unsorted].sort((a, b) => a.date.localeCompare(b.date));
   if (new Set(days.map((day) => day.date)).size !== days.length) throw new UploadError("Each date can appear only once.");
   if (days.length < CLAIM_DAYS + MIN_BASELINE_DAYS) {
-    throw new UploadError(`The file needs at least ${CLAIM_DAYS + MIN_BASELINE_DAYS} days: ${MIN_BASELINE_DAYS} usual days and a ${CLAIM_DAYS}-day claim week.`);
+    throw new UploadError(`A claim needs at least ${CLAIM_DAYS + MIN_BASELINE_DAYS} days: ${MIN_BASELINE_DAYS} usual days and a ${CLAIM_DAYS}-day claim week.`);
   }
   const week = days.slice(-CLAIM_DAYS);
   const spread = (new Date(week.at(-1).date) - new Date(week[0].date)) / DAY_MS;

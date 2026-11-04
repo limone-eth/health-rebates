@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { summarizeBaseline } from "../tee/claim.mjs";
 import { loadMembers } from "../tee/members.mjs";
-import { MAX_UPLOAD_BYTES, parseUpload, UploadError } from "./upload.mjs";
+import { authorizeUrl, newState, readTrackerDays, TrackerError, TRACKERS } from "./trackers.mjs";
+import { MAX_UPLOAD_BYTES, parseUpload, uploadFromTracker, UploadError } from "./upload.mjs";
 import { insurerView, memberView } from "./views.mjs";
 
 const STATE_FILE = new URL("./state.json", import.meta.url);
@@ -14,6 +15,8 @@ const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".csv": "text/csv" };
 const MEMBER_NAMES = ["A", "B", "C"];
 const MAX_BODY = 256;
+// A device maker sets the length of its code, so this limit is larger.
+const MAX_TRACKER_BODY = 8192;
 const UPLOAD_NAME = "You";
 export const DEFAULT_MODEL = "Qwen/Qwen3.8-27B";
 export const HELD_REASON = "Approve and Decline are off on this shared copy, so the demo stays the same for each visitor.";
@@ -41,6 +44,8 @@ export async function createApp({
   saveState = null,
   read = readClaim,
   viewFn = view,
+  trackers = {},
+  trackerFetch = fetch,
 } = {}) {
   const save = saveState ?? ((state) => writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`));
   const data = Object.fromEntries((members ?? (await loadMembers())).map((member) => [member.name, member]));
@@ -51,11 +56,11 @@ export async function createApp({
     res.end(JSON.stringify(body));
   };
 
-  const readBody = async (req) => {
+  const readBody = async (req, limit = MAX_BODY) => {
     let text = "";
     for await (const chunk of req) {
       text += chunk;
-      if (text.length > MAX_BODY) throw new Error("Body is too large");
+      if (text.length > limit) throw new Error("Body is too large");
     }
     return text ? JSON.parse(text) : {};
   };
@@ -83,6 +88,7 @@ export async function createApp({
       reason: off,
       can_decide: Boolean(live) && !hosted,
       held_reason: hosted ? HELD_REASON : null,
+      trackers: trackerNames(),
       pool: state.pool,
       explorer: EXPLORER,
     };
@@ -129,35 +135,38 @@ export async function createApp({
   };
 
   // An upload runs like a claim, but its data and result never go in the state, on any host.
-  const uploadView = async (state, upload, stored) => {
+  const uploadView = async (state, upload, stored, source) => {
     const shown = { ...state, members: { ...state.members, [UPLOAD_NAME]: stored } };
     const [config, claim, totals] = await Promise.all([viewFn(state.pool, "get_config"), stored.account ? read(shown, UPLOAD_NAME) : null, viewFn(state.pool, "get_totals")]);
     const facts = claim ?? { name: UPLOAD_NAME, stored, record: null, signerRegistered: null };
     return {
-      member: memberView({ claim: facts, config, rows: upload.claimRows, baseline: summarizeBaseline(upload.baselineRows) }),
-      insurer_row: insurerView({ pool: state.pool, config, totals, claims: [facts] }).members[0],
+      member: { ...memberView({ claim: facts, config, rows: upload.claimRows, baseline: summarizeBaseline(upload.baselineRows) }), source },
+      insurer_row: { ...insurerView({ pool: state.pool, config, totals, claims: [facts] }).members[0], source },
     };
   };
 
-  async function runUpload(req, res) {
+  // A file and a tracker run the same way. Only the source of the days differs.
+  async function runVisitorClaim(res, source, load) {
     if (running) return send(res, 409, { detail: "A claim is running. Try again in a minute." });
     running = true;
     try {
+      const state = getState();
       let upload;
       try {
-        upload = parseUpload(await readText(req));
+        // This check comes first. A device maker's code works only once, so a claim at the cap must not spend it.
+        if (await capReached(state)) return send(res, 403, { detail: capReason });
+        upload = await load();
       } catch (error) {
-        if (error instanceof UploadError) return send(res, 422, { detail: error.message });
-        throw error;
+        if (error instanceof UploadError || error instanceof TrackerError) return send(res, 422, { detail: error.message });
+        console.error("visitor claim could not start:", error.name);
+        return send(res, 502, { detail: "Could not read your data. Try again." });
       }
-      const state = getState();
-      if (await capReached(state)) return send(res, 403, { detail: capReason });
       res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
       const write = (event) => res.write(`${JSON.stringify(event)}\n`);
       try {
-        write({ type: "preview", member: UPLOAD_NAME, session: await uploadView(state, upload, {}) });
+        write({ type: "preview", member: UPLOAD_NAME, session: await uploadView(state, upload, {}, source) });
         const stored = await live.runClaim(UPLOAD_NAME, (step, text) => write({ type: "step", step, text }), upload);
-        write({ type: "done", member: UPLOAD_NAME, session: await uploadView(state, upload, stored) });
+        write({ type: "done", member: UPLOAD_NAME, session: await uploadView(state, upload, stored, source) });
       } catch (error) {
         // The error can name a service, and the log must not hold uploaded data. So this logs only the type of error.
         console.error("upload claim failed:", error.name);
@@ -167,6 +176,28 @@ export async function createApp({
     } finally {
       running = false;
     }
+  }
+
+  const STATE_COOKIE = "tracker_state";
+  const stateCookie = (value, maxAge) => `${STATE_COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/api/trackers; Max-Age=${maxAge}${hosted ? "; Secure" : ""}`;
+  const cookieState = (req) => (req.headers.cookie ?? "").split(/;\s*/).find((part) => part.startsWith(`${STATE_COOKIE}=`))?.slice(STATE_COOKIE.length + 1);
+  const redirectUri = (req, maker) => `${hosted ? "https" : "http"}://${req.headers.host}/api/trackers/${maker}/callback`;
+  const redirect = (res, location, headers = {}) => {
+    res.writeHead(302, { Location: location, "Cache-Control": "no-store", ...headers });
+    res.end();
+  };
+  const trackerNames = () => Object.keys(TRACKERS).filter((maker) => trackers[maker]?.clientId && trackers[maker]?.clientSecret);
+
+  async function runTracker(req, res, maker) {
+    const { code, state } = await readBody(req, MAX_TRACKER_BODY).catch(() => ({}));
+    const expected = cookieState(req);
+    res.setHeader("Set-Cookie", stateCookie("", 0));
+    if (typeof code !== "string" || !code || !expected || state !== expected) {
+      return send(res, 403, { detail: "This connection expired. Connect again." });
+    }
+    return runVisitorClaim(res, maker, async () =>
+      uploadFromTracker(await readTrackerDays(maker, { code, ...trackers[maker], redirectUri: redirectUri(req, maker), fetchFn: trackerFetch })),
+    );
   }
 
   async function runClaim(req, res, name) {
@@ -221,7 +252,12 @@ export async function createApp({
         if (!sameSite(req)) return send(res, 403, { detail: "Request from another site" });
         if (pathname === "/api/uploads") {
           if (!live) return send(res, 403, { detail: liveReason });
-          return await runUpload(req, res);
+          return await runVisitorClaim(res, "file", async () => parseUpload(await readText(req)));
+        }
+        const trackerClaim = pathname.match(/^\/api\/trackers\/([a-z]+)\/claims$/);
+        if (trackerClaim) {
+          if (!live || !trackerNames().includes(trackerClaim[1])) return send(res, 403, { detail: liveReason || "This tracker is not set up." });
+          return await runTracker(req, res, trackerClaim[1]);
         }
         const match = pathname.match(/^\/api\/(claims|held)\/([ABC])$/);
         if (!match) return send(res, 404, { detail: "Not found" });
@@ -235,6 +271,18 @@ export async function createApp({
       if (pathname === "/api/insurer") return send(res, 200, await insurer(state));
       const match = pathname.match(/^\/api\/members\/([ABC])$/);
       if (match) return send(res, 200, await member(state, match[1]));
+      const trackerRoute = pathname.match(/^\/api\/trackers\/([a-z]+)\/(start|callback)$/);
+      if (trackerRoute && trackerNames().includes(trackerRoute[1]) && live) {
+        const [, maker, step] = trackerRoute;
+        if (step === "start") {
+          const value = newState();
+          return redirect(res, authorizeUrl(maker, { clientId: trackers[maker].clientId, redirectUri: redirectUri(req, maker), state: value }), { "Set-Cookie": stateCookie(value, 600) });
+        }
+        // The code goes in the fragment, so it reaches no log. The page sends it back in a POST and removes it from the address.
+        const params = new URL(req.url, "http://localhost").searchParams;
+        const code = params.get("code");
+        return redirect(res, code ? `/#tracker/${maker}/${encodeURIComponent(code)}/${encodeURIComponent(params.get("state") ?? "")}` : `/#tracker/${maker}/denied`);
+      }
       if (pathname.startsWith("/api/")) return send(res, 404, { detail: "Not found" });
       return serveFile(res, pathname);
     } catch (error) {
