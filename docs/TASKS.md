@@ -161,6 +161,14 @@ From [the record](decisions/2026-11-04-hosted-live-claims.md): "Anyone with the 
 - [x] Real claims pass on a preview URL: A paid, B not paid, C held, in 11 to 13 seconds each. The steps arrive one at a time.
 - [x] A real claim passes on the production URL, from a click in a headless browser: A paid, in 11 seconds. After a reload, the page shows the shared results.
 
+## 9e3. Motion of the live claim
+
+From [the record](decisions/2026-11-04-claim-motion.md): "I run emil-design-eng on the claim steps and the arriving result only."
+
+- [x] Each step ticks in place, and steps that arrive together still show one at a time.
+- [x] The ticket keeps its height from the start of a claim to the result.
+- [x] A real claim passes on the production URL with this code: B not paid, in 14 seconds.
+
 ## 9f. Release for the judges
 
 From [the record](decisions/2026-11-04-release-for-judges.md): "I merge PRs 1 to 5 in order". From [the publish record](decisions/2026-11-04-publish-from-clean-main.md): "Make a new public repo named health-rebates that holds only the clean main."
