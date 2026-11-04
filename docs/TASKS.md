@@ -48,6 +48,14 @@ From PLAN.md: "A fetch returns 7 days per member".
 - [x] Only C's claim week differs from the member's own baseline.
 - [x] The activity and sleep responses match the Open Wearables OpenAPI schema (a one-time check, not in the tests).
 
-## 5. Remaining plan
+## 5. TEE check (done)
 
-See the table in [PLAN.md](PLAN.md): TEE check, contract, web app, README and video.
+From PLAN.md: "A, B, C give the expected results 5 times in a row".
+
+- [x] `npm run check` in `tee/` passes 5 runs: A paid, B not paid, C held for review.
+- [x] Each run verifies the attestation before it sends member data, and verifies each claim signature.
+- [x] The explanation is a separate completion, and it does not go on-chain.
+
+## 6. Remaining plan
+
+See the table in [PLAN.md](PLAN.md): contract, web app, README and video.

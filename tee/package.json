@@ -1,0 +1,13 @@
+{
+  "name": "tee-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --env-file=../.env check.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@phala/dcap-qvl-node": "0.3.3",
+    "viem": "2.21.0"
+  }
+}

@@ -4,7 +4,7 @@ An insurer pays health rebates for healthy weeks, and never sees the member's he
 
 Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Private AI, Real-World Money).
 
-**Status: day 1 spike.** The demo does not exist yet. See [docs/PLAN.md](docs/PLAN.md).
+**Status: in progress.** The spike, the mock wearable service and the TEE check run. The contract flow and the web app do not exist yet. See [docs/PLAN.md](docs/PLAN.md).
 
 ## What runs today
 
@@ -35,6 +35,14 @@ You see: all tests pass, then synthetic members A, B and C. Each member has 28 b
 
 The service copies the API shape of [Open Wearables](https://github.com/the-momentum/open-wearables) (MIT): the paths, the header and the activity and sleep summary schemas. It holds no Open Wearables code. A real instance can replace it, which brings Garmin, Oura, Whoop and other devices. We have not tried this.
 
+TEE check. Needs Node 20.6 or newer and an API key in `.env`. It starts the mock wearable service itself:
+
+```sh
+cd tee && npm install && npm test && npm run check
+```
+
+You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md).
+
 ## NEAR tools used
 
 - NEAR AI Cloud: model inference in a TEE, attestation, response signatures.
@@ -43,6 +51,7 @@ The service copies the API shape of [Open Wearables](https://github.com/the-mome
 ## Limits
 
 - NEAR AI Cloud runs the model in a TEE, not our code. A small service fetches the wearable data outside the TEE. The insurer never sees the data, but it trusts that service.
+- The TEE does not apply the rebate rule. Code outside the TEE marks each day, and the model counts the marks and does the pattern check. See [docs/tee-check.md](docs/tee-check.md).
 - A response signature proves that the TEE gave an answer. It does not prove which prompt the TEE got. See [docs/spike-day-1.md](docs/spike-day-1.md).
 - Synthetic data only. Testnet only. A simulated insurer.
 
