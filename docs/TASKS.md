@@ -159,7 +159,7 @@ From [the record](decisions/2026-11-04-hosted-live-claims.md): "Anyone with the 
 - [x] The pool holds enough tokens for the cap. The agent moved 3 NEAR to it.
 - [x] The owner adds the keys with `node chain/add-hosted-keys.mjs <preview|production> 65`.
 - [x] Real claims pass on a preview URL: A paid, B not paid, C held, in 11 to 13 seconds each. The steps arrive one at a time.
-- [ ] A real claim passes on the production URL.
+- [x] A real claim passes on the production URL, from a click in a headless browser: A paid, in 11 seconds. After a reload, the page shows the shared results.
 
 ## 9f. Release for the judges
 
