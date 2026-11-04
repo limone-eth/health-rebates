@@ -6,7 +6,7 @@ Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Pr
 
 **Status: the demo runs end to end, on NEAR testnet.** A fresh clone passes the steps below. See [docs/PLAN.md](docs/PLAN.md).
 
-**Try it:** [insurance-health-rebates.vercel.app](https://insurance-health-rebates.vercel.app) shows the last real results from the chain. This hosted copy has no keys, so its live buttons are off. To run a live claim, run the web app on your own machine with keys.
+**Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. This hosted copy has no keys, so its live buttons are off. To run a live claim, run the web app on your own machine with keys.
 
 ## What runs today
 
