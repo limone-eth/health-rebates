@@ -6,7 +6,7 @@ Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Pr
 
 **Status: the demo runs end to end, on NEAR testnet.** A fresh clone passes the steps below. See [docs/PLAN.md](docs/PLAN.md).
 
-**Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. Press "Run a live claim" to send a real claim to NEAR testnet, with no setup. You see the result on your screen only. You can also upload your own data as a CSV, from the template on the page. When the Whoop or Oura keys are set, you can also connect that tracker. A claim cap limits the hosted copy, and Approve and Decline stay off. At the cap, the page shows the last real results only.
+**Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. Press "Run a live claim" to send a real claim to NEAR testnet, with no setup. You see the result on your screen only. You can also upload your own data as a CSV, from the template on the page. For the once-a-year lab rebate, choose a sample lab report or upload your own (PDF or photo): a model on NEAR AI Cloud reads the HbA1c values, and code applies the rule. When the Whoop or Oura keys are set, you can also connect that tracker. A claim cap limits the hosted copy, and Approve and Decline stay off. At the cap, the page shows the last real results only.
 
 ## What runs today
 
@@ -46,7 +46,7 @@ cd tee && npm install && npm test && npm run check
 
 You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md). This check is from the first version, where a model read the week. Wearable claims now use plain code, and the attested model is for lab reports.
 
-Testnet run. It deploys tUSD and the rebate pool, then sends real wearable claims, and the pool pays A in tUSD. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
+Testnet run. It deploys tUSD and the rebate pool, then sends real wearable claims and two lab claims, and the pool pays in tUSD. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
 
 Web app. It has a member screen, an insurer screen and a Verified panel. Needs Node 20.6 or newer:
 
@@ -66,7 +66,10 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 
 - We check which compose file the TEE started, and that NVIDIA accepts its GPU evidence. We do not prove that the software is safe: we have no trusted list of images, and a manager in the TEE can start other containers later. See [the limits](docs/spike-day-1.md#limits-of-the-software-check).
 - The wearable service applies the rebate rule in plain code and signs the result. No model reads the week, and no TEE runs this code. The insurer never sees the data, but it trusts that service.
-- NEAR AI Cloud runs the model in a TEE, not our code. We keep it for lab reports.
+- NEAR AI Cloud runs the model in a TEE, not our code. The model only reads the HbA1c values from a lab report. Our code applies the lab rule to them, outside the TEE.
+- The contract checks the NEAR AI signature on the request hash and the response hash, and the service signature on the lab result. It cannot read the model's answer, so it trusts the service to apply the rule to that signed answer. The member keeps the signed answer (a download on the page), so an auditor can check it against the hashes later.
+- A lab report can be edited before upload, and the lab does not sign it. A real service needs signed lab reports or zkTLS.
+- A report that a visitor uploads goes to NEAR AI Cloud. Our server keeps no report and no value. Use the samples, or a report that you are happy to send.
 - A response signature proves that the TEE gave an answer. It does not prove which prompt the TEE got. See [docs/spike-day-1.md](docs/spike-day-1.md).
 - The insurer does not see the wearable data, but some results are public. Testnet transaction arguments are public, so each member's `days_met`, pattern result and input hash are public, under a pseudonymous account. A later fix: return only `eligible` or `hold`.
 - For the demo, one server holds the member, insurer and wearable keys. A real service keeps them apart.
