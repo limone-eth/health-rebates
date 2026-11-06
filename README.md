@@ -8,6 +8,10 @@ Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Pr
 
 **Try it:** [health-rebates.vercel.app](https://health-rebates.vercel.app) shows the last real results from the chain. Press "Run a live claim" to send a real claim to NEAR testnet, with no setup. You see the result on your screen only. You can also upload your own data as a CSV, from the template on the page. For the once-a-year lab rebate, choose a sample lab report or upload your own (PDF or photo): a model on NEAR AI Cloud reads the HbA1c values, and code applies the rule. When the Whoop or Oura keys are set, you can also connect that tracker. A claim cap limits the hosted copy, and Approve and Decline stay off. At the cap, the page shows the last real results only.
 
+## Compared with Vitality-style programs
+
+Insurer wellness programs such as Vitality already pay for healthy habits, but the program collects the raw data. Discovery Vitality's privacy statement lists "step count, heart rate, … sleep data" from linked devices ([source](https://discovery.co.za/corporate/privacy-statement-discovery-group)), and its health check gives points for results such as blood glucose and cholesterol ([source](https://www.discovery.co.za/vitality/vitality-health-check-2024)). When Generali started Vitality in Germany in 2016, the insurer got only a status level, but a separate Vitality company processed the raw data ([source](https://www.computerwoche.de/article/2739709/generali-vitality-durch-anreize-zum-glaesernen-versicherten.html)). In this demo, no one stores the raw data: the rebate service reads it for one claim, applies the rule and keeps nothing. The insurer and the chain get the result and the proof only.
+
 ## What runs today
 
 Contract and token. Needs Rust only, no API key:

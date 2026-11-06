@@ -418,3 +418,4 @@ details.tech dd { font: 400 13px/1.5 var(--mono); overflow-wrap: anywhere; }
   .trust th, .trust td, .trust tbody th { border: 0; padding: 0; width: auto; }
   .trust td::before { content: attr(data-label); display: block; font: 11px/1.4 var(--mono, monospace); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
 }
+.trust-frame { max-width: 720px; margin-top: 16px; }

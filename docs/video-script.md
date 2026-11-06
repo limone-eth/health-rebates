@@ -1,6 +1,6 @@
 # Demo video script
 
-Target: 1:50. The limit is 2 minutes. Speak about 240 words.
+Target: 1:50. The limit is 2 minutes. Speak about 250 words.
 
 ## Before you record
 
@@ -13,14 +13,15 @@ Target: 1:50. The limit is 2 minutes. Speak about 240 words.
 
 | Time | On screen | Say |
 |---|---|---|
-| 0:00 | Member A, top of the page | "An insurer wants to reward your healthy weeks. Today, that means it gets your steps, your sleep and your heart rate. This demo pays the rebate, and the insurer never gets that data." |
-| 0:15 | Point at the week, then at "All your insurer sees" | "This is A's ticket. On the left: the real week, which only A sees. On the right: the part that the insurer gets. Six good days, a usual week, and the rebate." |
-| 0:30 | Press "Run a live claim". Let the steps show. Cut the wait in the edit, and show the cut. | "This is a real claim. A model runs on NEAR AI Cloud, in a sealed machine. Intel confirms the machine before any data goes in. The model counts the good days and signs its answer." |
-| 0:55 | The result arrives | "A NEAR contract checks two signatures: the model's and the wearable service's. Then it pays, with no person in the loop." |
-| 1:05 | Press "Insurer" at the top. The ticket stub moves across. | "Here is the same week from the insurer's side. It has the result and the proof. It has no health data. A test checks this on each insurer response." |
-| 1:18 | Press "Verified" on member A | "Verified opens each check. It also says what we did not prove. We do not prove that the software in the machine is safe. And some facts are public, under a made-up name." |
-| 1:32 | Scroll to member C | "C's numbers meet the goal, but the week does not look like C's own. C maybe lent the watch. The contract holds the claim, and the insurer decides, still with no health data." |
-| 1:44 | Press "Approve and pay", if you have the time. Otherwise stay on C. | "Synthetic data, test tokens, a simulated insurer. The code and the limits are in the README." |
+| 0:00 | Member A, top of the page | "Programs like Vitality already pay for healthy habits, but the program collects your steps, sleep and lab results. This demo pays the rebate, and no one stores that data." |
+| 0:15 | Point at the week, then at "All your insurer sees" | "This is A's ticket. Only A sees the week. The insurer gets the right side: six good days, a usual week, and the rebate." |
+| 0:28 | Press "Run a live claim". Let the steps show. | "The wearable service applies the rule in plain code and signs the result. A's new account has 0 NEAR: A signs the claim, and the insurer relays it and pays the gas." |
+| 0:45 | The result arrives | "The NEAR contract checks the signature and pays 10 test dollars." |
+| 0:52 | Scroll to "Lab rebate". Choose "0.4 points better", then "Run the lab claim". | "Once a year, there is a lab rebate. The report goes to a model in a sealed machine on NEAR AI Cloud. The model only reads the HbA1c values, and signs its answer. Plain code applies the rule." |
+| 1:10 | The lab result arrives. Open "What the model read". | "Only A sees the values. The chain gets two hashes and the result. The contract checks the model's signature and the service's signature, then pays." |
+| 1:22 | Press "Insurer" at the top. Scroll to "Lab claims". | "Here is the insurer's side. It has the results and the proof. It has no health data and no report." |
+| 1:32 | Open "What you trust" | "This table says what each party sees and can fake. A lab PDF can be edited, and trackers do not sign their data. Signed lab reports and zkTLS are the next steps." |
+| 1:45 | Scroll to member C on the insurer screen | "C's numbers meet the goal, but the week does not look like C's own. The contract holds the claim for a person to review. Synthetic data, test tokens, a simulated insurer. The code and the limits are in the README." |
 
 ## After you record
 
@@ -28,6 +29,7 @@ If you approved or declined C's claim, run a new claim for C on the member scree
 
 ## Words to avoid
 
-- Do not say "the TEE checks the rule". Code outside the sealed machine marks each day. The model counts the marks and does the pattern check.
-- Do not say that the data is fully private. Testnet transaction arguments are public: good days and the pattern result, under a made-up name.
+- Do not say "the TEE checks the rule". Plain code applies both rules, outside the sealed machine. The model only reads the lab values.
+- Do not say that the data is fully private. Testnet transaction arguments are public: good days, the pattern result and the lab result, under a made-up name.
+- Do not say that insurers see raw data today. The sources say that the program collects it. In one case, the insurer got only a status level.
 - Do not say that the software is verified.

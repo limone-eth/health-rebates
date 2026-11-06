@@ -586,6 +586,7 @@ function trustHtml() {
   const head = ["Who", "Sees", "Can fake or get wrong", "Next step"];
   return `<details class="trust-panel">
     <summary><span class="lab">For all claims</span><span class="trust-title">What you trust</span></summary>
+    <p class="rule trust-frame">Programs such as Vitality already pay for healthy habits, but the program collects the raw data: Discovery Vitality lists steps, heart rate and sleep from linked devices (<a class="link" href="https://discovery.co.za/corporate/privacy-statement-discovery-group" target="_blank" rel="noopener noreferrer">source</a>). Here, no one stores the raw data. The insurer and the chain get the result and the proof.</p>
     <table class="trust">
       <thead><tr>${head.map((h) => `<th scope="col" class="lab">${h}</th>`).join("")}</tr></thead>
       <tbody>${TRUST.map(([who, ...rest]) => `<tr><th scope="row">${esc(who)}</th>${rest.map((cell, i) => `<td data-label="${head[i + 1]}">${esc(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
