@@ -21,6 +21,7 @@
 !chain/near.mjs
 !tee
 !tee/claim.mjs
+!tee/lab.mjs
 !tee/members.mjs
 !tee/near-ai.mjs
 !tee/software.mjs
