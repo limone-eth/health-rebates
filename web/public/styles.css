@@ -401,3 +401,20 @@ details.tech dd { font: 400 13px/1.5 var(--mono); overflow-wrap: anywhere; }
   .lab-samples .btn { flex: 1 1 100%; }
 }
 .lab-row .fields { flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* What you trust */
+.trust-panel { max-width: 960px; margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--stone); }
+.trust-panel summary { display: grid; gap: 6px; cursor: pointer; list-style: none; }
+.trust-panel summary::-webkit-details-marker { display: none; }
+.trust-title { font-size: 26px; font-weight: 300; letter-spacing: -0.02em; text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 1px; }
+.trust-panel[open] .trust-title { text-decoration: none; }
+.trust { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; line-height: 1.45; }
+.trust th, .trust td { text-align: left; vertical-align: top; padding: 12px 16px 12px 0; border-top: 1px solid var(--stone); }
+.trust tbody th { font-weight: 500; width: 18%; }
+.trust td { color: var(--ink-2); }
+@media (max-width: 720px) {
+  .trust thead { display: none; }
+  .trust tr { display: grid; gap: 6px; padding: 14px 0; border-top: 1px solid var(--stone); }
+  .trust th, .trust td, .trust tbody th { border: 0; padding: 0; width: auto; }
+  .trust td::before { content: attr(data-label); display: block; font: 11px/1.4 var(--mono, monospace); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+}

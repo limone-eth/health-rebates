@@ -62,6 +62,18 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 - NEAR testnet contract (`near-sdk`): `env::ecrecover`, `env::keccak256`, `env::sha256`, cross-contract calls with a callback.
 - NEP-141 token (`near-contract-standards`): tUSD, paid with `storage_deposit` and `ft_transfer`, and funded with `ft_transfer_call`.
 
+## What you trust
+
+The page has the same table, under "What you trust".
+
+| Who | Sees | Can fake or get wrong | Next step |
+|---|---|---|---|
+| Your tracker (Whoop, Oura) | Your steps, active minutes and sleep. | Whoop and Oura do not sign their data. A changed CSV or tracker answer looks the same to us. | zkTLS on the tracker's API. |
+| Your lab | Your full report. | The lab does not sign the report, so anyone can edit a PDF or photo before the upload. | Lab reports with the lab's signature, or zkTLS on the lab portal. |
+| The rebate service (this demo) | Your week, and the HbA1c values that the model read. It keeps neither. | It can sign a wrong result. The contract checks its signature, not its rule. For a lab claim, you keep the model's signed answer, so an auditor can check the result against the hashes on-chain. | Run the service in a TEE with a public image. |
+| NEAR AI Cloud | The lab report image. | The model can misread a value. Each answer has a signature from the TEE. The attestation shows the GPU and the compose file that started, not that all its software is safe. | A trusted list of model images. |
+| The rebate contract | Hashes, results and payouts. No health data. | Nothing: its code and its transactions are public. The insurer adds and removes the model signers. | Check the attestation on-chain. |
+
 ## Limits
 
 - We check which compose file the TEE started, and that NVIDIA accepts its GPU evidence. We do not prove that the software is safe: we have no trusted list of images, and a manager in the TEE can start other containers later. See [the limits](docs/spike-day-1.md#limits-of-the-software-check).

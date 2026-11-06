@@ -205,7 +205,8 @@ function memberHtml(m, { arrive, landed }) {
       <div id="steps" aria-live="polite">${stepsHtml()}</div>
     </section>
   <div id="proof">${app.proof.member && m.outcome ? proofHtml(m, "your claim") : ""}</div>
-  ${labHtml()}`;
+  ${labHtml()}
+  ${trustHtml()}`;
 }
 
 // The preview shows an upload before its claim ends, so the picker needs the name from that point.
@@ -314,7 +315,8 @@ function insurerHtml(data, { arrive }) {
     ${data.members.map((m, index) => stubHtml(m, index, data, arrive)).join("")}
   </section>
   <div id="proof">${opened ? proofHtml(opened, who(opened.member)) : ""}</div>
-  ${labInsurerHtml()}`;
+  ${labInsurerHtml()}
+  ${trustHtml()}`;
 }
 
 function stubHtml(m, index, data, arrive) {
@@ -569,6 +571,26 @@ function labHtml() {
     ${error ? `<p class="alert" role="alert">The lab claim stopped. ${esc(error)}</p>` : ""}
     <div id="lab-steps" aria-live="polite">${labStepsHtml()}</div>
   </section>`;
+}
+
+// What each party can see or fake. The README has the same table.
+const TRUST = [
+  ["Your tracker (Whoop, Oura)", "Your steps, active minutes and sleep.", "Whoop and Oura do not sign their data. A changed CSV or tracker answer looks the same to us.", "zkTLS on the tracker's API."],
+  ["Your lab", "Your full report.", "The lab does not sign the report, so anyone can edit a PDF or photo before the upload.", "Lab reports with the lab's signature, or zkTLS on the lab portal."],
+  ["The rebate service (this demo)", "Your week, and the HbA1c values that the model read. It keeps neither.", "It can sign a wrong result. The contract checks its signature, not its rule. For a lab claim, you keep the model's signed answer, so an auditor can check the result against the hashes on-chain.", "Run the service in a TEE with a public image."],
+  ["NEAR AI Cloud", "The lab report image.", "The model can misread a value. Each answer has a signature from the TEE. The attestation shows the GPU and the compose file that started, not that all its software is safe.", "A trusted list of model images."],
+  ["The rebate contract", "Hashes, results and payouts. No health data.", "Nothing: its code and its transactions are public. The insurer adds and removes the model signers.", "Check the attestation on-chain."],
+];
+
+function trustHtml() {
+  const head = ["Who", "Sees", "Can fake or get wrong", "Next step"];
+  return `<details class="trust-panel">
+    <summary><span class="lab">For all claims</span><span class="trust-title">What you trust</span></summary>
+    <table class="trust">
+      <thead><tr>${head.map((h) => `<th scope="col" class="lab">${h}</th>`).join("")}</tr></thead>
+      <tbody>${TRUST.map(([who, ...rest]) => `<tr><th scope="row">${esc(who)}</th>${rest.map((cell, i) => `<td data-label="${head[i + 1]}">${esc(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table>
+  </details>`;
 }
 
 function labInsurerHtml() {
