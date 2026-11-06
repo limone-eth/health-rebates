@@ -10,13 +10,14 @@ Built for the [NEAR Hackathon](https://nearhackathon.com/) (tracks: Privacy & Pr
 
 ## What runs today
 
-Contract signature check. Needs Rust only, no API key:
+Contract and token. Needs Rust only, no API key:
 
 ```sh
-cd contract && cargo test -- --nocapture
+(cd contract && cargo test -- --nocapture)
+(cd token && cargo test)
 ```
 
-You see: all tests pass, and the gas cost of one signature check.
+You see: all tests pass, and the gas cost of one signature check. The token is tUSD, a NEP-141 test token with no value. A real insurer pays in a stablecoin such as USDC.
 
 NEAR AI Cloud check. Needs Node 20.6 or newer and an API key in `.env` (copy `.env.example`):
 
@@ -43,9 +44,9 @@ TEE check. Needs Node 20.6 or newer and an API key in `.env`. It starts the mock
 cd tee && npm install && npm test && npm run check
 ```
 
-You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md).
+You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md). This check is from the first version, where a model read the week. Wearable claims now use plain code, and the attested model is for lab reports.
 
-Testnet run. It deploys the rebate pool, then sends real TEE claims. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
+Testnet run. It deploys tUSD and the rebate pool, then sends real wearable claims, and the pool pays A in tUSD. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
 
 Web app. It has a member screen, an insurer screen and a Verified panel. Needs Node 20.6 or newer:
 
@@ -57,22 +58,24 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 
 ## NEAR tools used
 
-- NEAR AI Cloud: model inference in a TEE, attestation, response signatures.
-- NEAR testnet contract (`near-sdk`): `env::ecrecover`, `env::keccak256`, `env::sha256`.
+- NEAR AI Cloud: model inference in a TEE, attestation, response signatures. For lab reports.
+- NEAR testnet contract (`near-sdk`): `env::ecrecover`, `env::keccak256`, `env::sha256`, cross-contract calls with a callback.
+- NEP-141 token (`near-contract-standards`): tUSD, paid with `storage_deposit` and `ft_transfer`, and funded with `ft_transfer_call`.
 
 ## Limits
 
 - We check which compose file the TEE started, and that NVIDIA accepts its GPU evidence. We do not prove that the software is safe: we have no trusted list of images, and a manager in the TEE can start other containers later. See [the limits](docs/spike-day-1.md#limits-of-the-software-check).
-- NEAR AI Cloud runs the model in a TEE, not our code. A small service fetches the wearable data outside the TEE. The insurer never sees the data, but it trusts that service.
-- The TEE does not apply the rebate rule. Code outside the TEE marks each day, and the model counts the marks and does the pattern check. See [docs/tee-check.md](docs/tee-check.md).
+- The wearable service applies the rebate rule in plain code and signs the result. No model reads the week, and no TEE runs this code. The insurer never sees the data, but it trusts that service.
+- NEAR AI Cloud runs the model in a TEE, not our code. We keep it for lab reports.
 - A response signature proves that the TEE gave an answer. It does not prove which prompt the TEE got. See [docs/spike-day-1.md](docs/spike-day-1.md).
-- The insurer does not see the wearable data, but some results are public. Testnet transaction arguments are public, so each member's `days_met`, pattern result, model response and `request_hash` are public, under a pseudonymous account. A later fix: return only `eligible` or `hold`.
+- The insurer does not see the wearable data, but some results are public. Testnet transaction arguments are public, so each member's `days_met`, pattern result and input hash are public, under a pseudonymous account. A later fix: return only `eligible` or `hold`.
 - For the demo, one server holds the member, insurer and wearable keys. A real service keeps them apart.
-- The hosted copy has no login. Anyone with the link can use its live claims, up to the cap. Two claims that start at the same time can pass the cap by a few. A claim that fails does not count, but its model calls still cost money.
+- The hosted copy has no login. Anyone with the link can use its live claims, up to the cap. Two claims that start at the same time can pass the cap by a few. A claim that fails does not count.
 - Each hosted claim stays on the chain, so the pool's totals and balance change. The results that visitors see first stay the same.
 - Each live claim uses a new account, so one member can claim one week more than once. A real service links one NEAR account to each member.
-- An uploaded CSV has no proof from a wearable service: the demo's key signs it, so anyone can type a week that gets paid. The server reads the file during the claim and keeps nothing. The model reads the week in the TEE. The good days and the result stay public on testnet, under a made-up account. Do not upload data that you want to keep private.
+- An uploaded CSV has no proof from a wearable service: the demo's key signs it, so anyone can type a week that gets paid. The server reads the file during the claim and keeps nothing. Code on the server counts the good days, and no model reads the week. The good days and the result stay public on testnet, under a made-up account. Do not upload data that you want to keep private.
 - A connected Whoop or Oura has no proof from the device maker: this server reads the week by OAuth and signs it with the demo's key. The server keeps no data and no token. The good days and the result stay public on testnet, as with a CSV. Whoop gives heart rate zones for workouts only, so its active minutes count workouts only.
+- tUSD is a test token with no value. A real insurer pays in a stablecoin such as USDC.
 - The sample members are synthetic. Testnet only. A simulated insurer.
 
 ## Baseline
