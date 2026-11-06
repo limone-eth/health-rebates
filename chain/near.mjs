@@ -55,10 +55,10 @@ export async function waitForAccount(account) {
 }
 
 // Returns the transaction hash and the failure text, if any. A failed call does not throw.
-export async function call(account, contractId, method, args, deposit = 0n) {
+export async function call(account, contractId, method, args, deposit = 0n, tgas = 50) {
   const outcome = await account.signAndSendTransaction({
     receiverId: contractId,
-    actions: [actions.functionCall(method, args, teraToGas(50), deposit)],
+    actions: [actions.functionCall(method, args, teraToGas(tgas), deposit)],
     throwOnFailure: false,
   });
   const failure =
@@ -66,8 +66,8 @@ export async function call(account, contractId, method, args, deposit = 0n) {
   return { hash: outcome.transaction.hash, failure: failure ? JSON.stringify(failure) : null };
 }
 
-export async function mustCall(account, contractId, method, args, deposit = 0n) {
-  const result = await call(account, contractId, method, args, deposit);
+export async function mustCall(account, contractId, method, args, deposit = 0n, tgas = 50) {
+  const result = await call(account, contractId, method, args, deposit, tgas);
   if (result.failure) throw new Error(`${method} failed: ${result.failure}`);
   return result;
 }

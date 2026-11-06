@@ -13,7 +13,7 @@ const state = {
   week: "2026-11-02",
   members: Object.fromEntries(["A", "B", "C"].map((name) => [name, { account: `${name}.testnet`, tx: "tx", recorded_on: "2026-11-03", signer: "0xabc", explanation: "A private sentence." }])),
 };
-const config = { insurer: "i.testnet", rule: "the rule", model: "m", min_days: 5, total_days: 7, rebate: "100000000000000000000000" };
+const config = { insurer: "i.testnet", rule: "the rule", model: "m", min_days: 5, total_days: 7, rebate: "10000000", token: "tusd.testnet" };
 const totals = { paid: 1, not_paid: 1, held: 1, rejected: 0 };
 const fakeView = async (_pool, method) => (method === "get_config" ? config : totals);
 const fakeRead = async (current, name) => ({

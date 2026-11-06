@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { loadMembers } from "../tee/members.mjs";
 import { insurerView, memberView } from "./views.mjs";
 
-const config = { insurer: "i.testnet", rule: "the rule", model: "m", min_days: 5, total_days: 7, rebate: "100000000000000000000000" };
+const config = { insurer: "i.testnet", rule: "the rule", model: "m", min_days: 5, total_days: 7, rebate: "10000000", token: "tusd.testnet" };
 const totals = { paid: 1, not_paid: 1, held: 1, rejected: 0 };
 const claim = (name, days, pattern, outcome, extra = {}) => ({
   name,
@@ -44,7 +44,7 @@ test("the insurer view counts members who met the rule, and pays only the paid m
   const result = view();
   assert.equal(result.met_rule, 2);
   assert.equal(result.members_total, 3);
-  assert.deepEqual(result.members.map((member) => member.payout), ["0.1 NEAR", null, null]);
+  assert.deepEqual(result.members.map((member) => member.payout), ["$10.00", null, null]);
 });
 
 test("a member with no claim on-chain shows as no claim", () => {

@@ -388,7 +388,7 @@ function proofHtml(m, who) {
       <summary>Technical details</summary>
       <dl>
         <dt class="lab">Network</dt><dd>NEAR testnet</dd>
-        ${m.payout ? `<dt class="lab">Rebate amount</dt><dd>${esc(m.payout)} (test tokens)</dd>` : ""}
+        ${m.payout ? `<dt class="lab">Rebate amount</dt><dd>${esc(m.payout)} (tUSD, a test token with no value)</dd>` : ""}
         <dt class="lab">Member account</dt><dd>${esc(m.account)}</dd>
         <dt class="lab">Pool</dt><dd>${esc(app.status.pool)}</dd>
         ${viaModel && app.insurer?.model ? `<dt class="lab">Model</dt><dd>${esc(app.insurer.model)}</dd>` : ""}

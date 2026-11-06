@@ -1,6 +1,10 @@
 // What each screen gets. The insurer view is built field by field, so that no health data can pass through it.
-const YOCTO_PER_MILLI = 10n ** 21n;
-const nearText = (yocto) => `${Number(BigInt(yocto) / YOCTO_PER_MILLI) / 1000} NEAR`;
+// tUSD has 6 decimals, like USDC. It is a test token with no value.
+const TUSD_UNITS = 1_000_000n;
+const dollarText = (units) => {
+  const value = BigInt(units);
+  return `$${value / TUSD_UNITS}.${String((value % TUSD_UNITS) / 10_000n).padStart(2, "0")}`;
+};
 
 const OUTCOME_TEXT = { Paid: "Paid", NotPaid: "Not paid", Held: "Held for review", Rejected: "Rejected" };
 
@@ -18,7 +22,7 @@ function claimFacts({ name, stored, record, signerRegistered, config }) {
     outcome: record?.outcome ?? null,
     outcome_text: OUTCOME_TEXT[record?.outcome] ?? "No claim",
     request_hash: record?.request_hash ?? null,
-    payout: record?.outcome === "Paid" ? nearText(config.rebate) : null,
+    payout: record?.outcome === "Paid" ? dollarText(config.rebate) : null,
   };
 }
 
@@ -30,7 +34,7 @@ export function insurerView({ pool, config, totals, claims }) {
     insurer: config.insurer,
     rule: config.rule,
     model: config.model,
-    rebate: nearText(config.rebate),
+    rebate: dollarText(config.rebate),
     min_days: config.min_days,
     total_days: config.total_days,
     pool_totals: { paid: totals.paid, not_paid: totals.not_paid, held: totals.held, rejected: totals.rejected },
@@ -44,7 +48,7 @@ export function memberView({ claim, config, rows, baseline }) {
   return {
     ...claimFacts({ ...claim, config }),
     rule: config.rule,
-    rebate: nearText(config.rebate),
+    rebate: dollarText(config.rebate),
     explanation: claim.stored.explanation ?? null,
     rows,
     baseline,
