@@ -4,17 +4,27 @@
 //! - `claim`: the wearable service signs (contract, member, week, request_hash), and a registered
 //!   NEAR AI signer signs (model, request_hash, response_hash): the TEE model gave this answer.
 //!
+//! The pool pays the rebate in tUSD, a NEP-141 test token, with `ft_transfer`. A real insurer pays in USDC.
+//! The insurer funds it with `ft_transfer_call`. If a payout fails, the claim goes back to Held.
+//!
 //! The insurer verifies the attestation off-chain, then registers the signer. A contract cannot check a TDX quote.
 //! Arguments of a testnet transaction are public: `days_met` and the pattern result are public, under the member's account.
 
-use near_sdk::serde_json::{self, Value};
+use near_sdk::json_types::U128;
+use near_sdk::serde_json::{self, json, Value};
 use near_sdk::store::{LookupMap, LookupSet};
-use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue};
 
 use crate::{recover_signer, sha256_hex};
 
 /// Kept in the pool for storage of new claim records.
 const STORAGE_RESERVE: NearToken = NearToken::from_millinear(100);
+/// NEP-145 registration for one account on the token. The token refunds what it does not use.
+const TOKEN_STORAGE: NearToken = NearToken::from_micronear(1_250);
+/// Minimums. The unused gas of the claim is shared among these calls too.
+const GAS_STORAGE_DEPOSIT: Gas = Gas::from_tgas(5);
+const GAS_FT_TRANSFER: Gas = Gas::from_tgas(5);
+const GAS_ON_PAYOUT: Gas = Gas::from_tgas(5);
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -58,7 +68,9 @@ pub struct Config {
     pub model: String,
     pub min_days: u8,
     pub total_days: u8,
-    pub rebate: NearToken,
+    /// tUSD units: 6 decimals, so 10 tUSD is 10_000_000.
+    pub rebate: U128,
+    pub token: AccountId,
 }
 
 #[near(contract_state)]
@@ -70,7 +82,10 @@ pub struct RebatePool {
     model: String,
     min_days: u8,
     total_days: u8,
-    rebate: NearToken,
+    rebate: u128,
+    token: AccountId,
+    /// tUSD that the pool holds and has not sent yet.
+    balance: u128,
     signers: LookupSet<[u8; 20]>,
     claims: LookupMap<String, ClaimRecord>,
     totals: Totals,
@@ -168,7 +183,8 @@ impl RebatePool {
         model: String,
         min_days: u8,
         total_days: u8,
-        rebate: NearToken,
+        rebate: U128,
+        token: AccountId,
     ) -> Self {
         require!(min_days > 0 && min_days <= total_days, "Bad rule days");
         Self {
@@ -178,14 +194,27 @@ impl RebatePool {
             model,
             min_days,
             total_days,
-            rebate,
+            rebate: rebate.0,
+            token,
+            balance: 0,
             signers: LookupSet::new(StorageKey::Signers),
             claims: LookupMap::new(StorageKey::Claims),
             totals: Totals::default(),
         }
     }
 
-    /// Anyone can add funds to the pool.
+    /// NEP-141 receiver: anyone can fund the pool with tUSD through `ft_transfer_call`. Other tokens go back.
+    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> PromiseOrValue<U128> {
+        let _ = msg;
+        if env::predecessor_account_id() != self.token {
+            return PromiseOrValue::Value(amount);
+        }
+        self.balance += amount.0;
+        env::log_str(&format!("Pool funded: {} tUSD units by {sender_id}", amount.0));
+        PromiseOrValue::Value(U128(0))
+    }
+
+    /// Anyone can add NEAR for storage and member registration on the token.
     #[payable]
     pub fn fund(&mut self) {
         require!(env::attached_deposit() > NearToken::from_yoctonear(0), "Attach a deposit");
@@ -266,7 +295,7 @@ impl RebatePool {
         require!(record.outcome == Outcome::Held, "This claim is not held");
         self.totals.held -= 1;
         if approve {
-            self.pay(&member);
+            self.pay(&member, &week);
             self.totals.paid += 1;
             record.outcome = Outcome::Paid;
         } else {
@@ -286,6 +315,29 @@ impl RebatePool {
         self.totals.clone()
     }
 
+    /// tUSD units that the pool can still pay.
+    pub fn get_balance(&self) -> U128 {
+        U128(self.balance)
+    }
+
+    /// Only the token's result decides this. A failed transfer puts the claim back to Held, so the insurer can pay it later.
+    #[private]
+    pub fn on_payout(&mut self, member: AccountId, week: String, #[callback_result] transfer: Result<(), PromiseError>) -> bool {
+        if transfer.is_ok() {
+            return true;
+        }
+        self.balance += self.rebate;
+        let key = claim_key(&member, &week);
+        if let Some(mut record) = self.claims.get(&key).cloned() {
+            record.outcome = Outcome::Held;
+            self.claims.insert(key, record);
+            self.totals.paid -= 1;
+            self.totals.held += 1;
+        }
+        env::log_str(&format!("Payout failed for {member} {week}: the claim is held"));
+        false
+    }
+
     pub fn get_config(&self) -> Config {
         Config {
             insurer: self.insurer.clone(),
@@ -293,7 +345,8 @@ impl RebatePool {
             model: self.model.clone(),
             min_days: self.min_days,
             total_days: self.total_days,
-            rebate: self.rebate,
+            rebate: U128(self.rebate),
+            token: self.token.clone(),
         }
     }
 
@@ -316,7 +369,7 @@ impl RebatePool {
             self.totals.held += 1;
             Outcome::Held
         } else {
-            self.pay(&member);
+            self.pay(&member, &week);
             self.totals.paid += 1;
             Outcome::Paid
         };
@@ -326,11 +379,33 @@ impl RebatePool {
     }
 
     /// The claim fails before it is recorded if the pool cannot pay, so the member can try again.
-    fn pay(&self, member: &AccountId) {
+    /// Registers the member with the token, then sends the rebate. `on_payout` handles a failed transfer.
+    fn pay(&mut self, member: &AccountId, week: &str) {
+        require!(self.balance >= self.rebate, "The pool does not have enough tUSD");
         let storage = env::storage_byte_cost().saturating_mul(env::storage_usage() as u128);
-        let needed = self.rebate.saturating_add(storage).saturating_add(STORAGE_RESERVE);
-        require!(env::account_balance() >= needed, "The pool does not have enough funds");
-        let _ = Promise::new(member.clone()).transfer(self.rebate);
+        let needed = storage.saturating_add(STORAGE_RESERVE).saturating_add(TOKEN_STORAGE);
+        require!(env::account_balance() >= needed, "The pool does not have enough NEAR for storage");
+        self.balance -= self.rebate;
+
+        let register = Promise::new(self.token.clone()).function_call(
+            "storage_deposit".to_string(),
+            json!({ "account_id": member, "registration_only": true }).to_string().into_bytes(),
+            TOKEN_STORAGE,
+            GAS_STORAGE_DEPOSIT,
+        );
+        let transfer = Promise::new(self.token.clone()).function_call(
+            "ft_transfer".to_string(),
+            json!({ "receiver_id": member, "amount": U128(self.rebate), "memo": format!("Health rebate {week}") }).to_string().into_bytes(),
+            NearToken::from_yoctonear(1),
+            GAS_FT_TRANSFER,
+        );
+        let check = Promise::new(env::current_account_id()).function_call(
+            "on_payout".to_string(),
+            json!({ "member": member, "week": week }).to_string().into_bytes(),
+            NearToken::from_yoctonear(0),
+            GAS_ON_PAYOUT,
+        );
+        let _ = register.then(transfer).then(check);
     }
 }
 
@@ -341,11 +416,13 @@ mod tests {
     use k256::ecdsa::SigningKey;
     use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
     use near_sdk::testing_env;
+    use near_sdk::mock::MockAction;
 
     const MODEL: &str = "test/model";
     const WEEK: &str = "2026-11-02";
     const HASH: &str = "abababababababababababababababababababababababababababababababab";
-    const REBATE: NearToken = NearToken::from_near(1);
+    const REBATE: u128 = 10_000_000; // 10 tUSD
+    const TOKEN: &str = "tusd.testnet";
 
     fn account(name: &str) -> AccountId {
         name.parse().unwrap()
@@ -377,11 +454,36 @@ mod tests {
             MODEL.to_string(),
             5,
             7,
-            REBATE,
+            U128(REBATE),
+            account(TOKEN),
         );
         context("insurer.testnet", NearToken::from_near(10));
         pool.register_signer(hex(&address(&ai_key())));
+        fund(&mut pool, 5 * REBATE);
+        context("insurer.testnet", NearToken::from_near(10));
         pool
+    }
+
+    /// The token calls ft_on_transfer after the insurer's ft_transfer_call.
+    fn fund(pool: &mut RebatePool, amount: u128) {
+        context(TOKEN, NearToken::from_near(10));
+        let _ = pool.ft_on_transfer(account("insurer.testnet"), U128(amount), String::new());
+    }
+
+    /// The number of ft_transfer calls to the token that pay `member`.
+    fn payouts(member: &str) -> usize {
+        get_created_receipts()
+            .iter()
+            .filter(|receipt| receipt.receiver_id == account(TOKEN))
+            .flat_map(|receipt| receipt.actions.iter())
+            .filter(|action| match action {
+                MockAction::FunctionCallWeight { method_name, args, .. } => {
+                    let args: Value = serde_json::from_slice(args).unwrap();
+                    method_name == b"ft_transfer" && args["receiver_id"] == member && args["amount"] == REBATE.to_string()
+                }
+                _ => false,
+            })
+            .count()
     }
 
     fn body(content: &str) -> String {
@@ -418,7 +520,7 @@ mod tests {
         let record = pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap();
         assert_eq!((record.days_met, record.pattern_matches_owner), (6, true));
         assert_eq!(pool.get_totals(), Totals { paid: 1, ..Totals::default() });
-        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("a.testnet")).count(), 1);
+        assert_eq!(payouts("a.testnet"), 1);
     }
 
     #[test]
@@ -613,11 +715,78 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "enough funds")]
-    fn fails_if_the_pool_cannot_pay() {
+    #[should_panic(expected = "enough tUSD")]
+    fn fails_if_the_pool_has_too_little_tusd() {
+        let mut pool = pool();
+        for member in ["a1.testnet", "a2.testnet", "a3.testnet", "a4.testnet", "a5.testnet"] {
+            assert_eq!(claim_wearable(&mut pool, member, 6, true), Outcome::Paid);
+        }
+        claim_wearable(&mut pool, "a6.testnet", 6, true);
+    }
+
+    #[test]
+    fn a_claim_that_fails_to_pay_is_not_recorded() {
+        let mut pool = pool();
+        for member in ["a1.testnet", "a2.testnet", "a3.testnet", "a4.testnet", "a5.testnet"] {
+            claim_wearable(&mut pool, member, 6, true);
+        }
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| claim_wearable(&mut pool, "a6.testnet", 6, true)));
+        assert!(failed.is_err());
+        assert!(pool.get_claim(account("a6.testnet"), WEEK.to_string()).is_none());
+        assert_eq!(pool.get_balance().0, 0);
+    }
+
+    #[test]
+    fn a_payout_registers_the_member_with_the_token_first() {
+        let mut pool = pool();
+        claim_wearable(&mut pool, "a.testnet", 6, true);
+        let calls: Vec<String> = get_created_receipts()
+            .iter()
+            .flat_map(|receipt| receipt.actions.iter())
+            .filter_map(|action| match action {
+                MockAction::FunctionCallWeight { method_name, .. } => Some(String::from_utf8(method_name.clone()).unwrap()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, ["storage_deposit", "ft_transfer", "on_payout"]);
+        assert_eq!(pool.get_balance().0, 4 * REBATE);
+    }
+
+    #[test]
+    fn the_pool_takes_tusd_only_from_the_token() {
+        let mut pool = pool();
+        context("fake-token.testnet", NearToken::from_near(10));
+        let returned = pool.ft_on_transfer(account("insurer.testnet"), U128(99), String::new());
+        assert!(matches!(returned, PromiseOrValue::Value(U128(99))));
+        assert_eq!(pool.get_balance().0, 5 * REBATE);
+    }
+
+    #[test]
+    fn a_failed_transfer_puts_the_claim_back_to_held() {
+        let mut pool = pool();
+        claim_wearable(&mut pool, "a.testnet", 6, true);
+        context("pool.testnet", NearToken::from_near(10));
+        assert!(!pool.on_payout(account("a.testnet"), WEEK.to_string(), Err(PromiseError::Failed)));
+        assert_eq!(pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap().outcome, Outcome::Held);
+        assert_eq!(pool.get_totals(), Totals { held: 1, ..Totals::default() });
+        assert_eq!(pool.get_balance().0, 5 * REBATE);
+    }
+
+    #[test]
+    fn a_good_transfer_keeps_the_claim_paid() {
+        let mut pool = pool();
+        claim_wearable(&mut pool, "a.testnet", 6, true);
+        context("pool.testnet", NearToken::from_near(10));
+        assert!(pool.on_payout(account("a.testnet"), WEEK.to_string(), Ok(())));
+        assert_eq!(pool.get_totals(), Totals { paid: 1, ..Totals::default() });
+    }
+
+    #[test]
+    #[should_panic(expected = "enough NEAR")]
+    fn fails_if_the_pool_cannot_pay_for_storage() {
         let mut pool = pool();
         let response = result(6, true);
-        context("a.testnet", NearToken::from_millinear(500));
+        context("a.testnet", NearToken::from_millinear(50));
         pool.claim(
             WEEK.to_string(),
             HASH.to_string(),
@@ -634,7 +803,7 @@ mod tests {
         claim(&mut pool, "d.testnet", &result(6, false));
         context("insurer.testnet", NearToken::from_near(10));
         assert_eq!(pool.resolve_held(account("c.testnet"), WEEK.to_string(), true), Outcome::Paid);
-        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("c.testnet")).count(), 1);
+        assert_eq!(payouts("c.testnet"), 1);
         assert_eq!(pool.resolve_held(account("d.testnet"), WEEK.to_string(), false), Outcome::Rejected);
         assert_eq!(pool.get_totals(), Totals { paid: 1, rejected: 1, ..Totals::default() });
     }
@@ -671,7 +840,7 @@ mod tests {
         let mut pool = pool();
         assert_eq!(claim_wearable(&mut pool, "a.testnet", 6, true), Outcome::Paid);
         // Each context() call clears the receipts, so check the payout before the next claim.
-        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("a.testnet")).count(), 1);
+        assert_eq!(payouts("a.testnet"), 1);
         assert_eq!(claim_wearable(&mut pool, "b.testnet", 3, true), Outcome::NotPaid);
         assert_eq!(claim_wearable(&mut pool, "c.testnet", 6, false), Outcome::Held);
         let record = pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap();
