@@ -211,6 +211,20 @@ From [the hosted copy record](decisions/2026-11-04-hosted-copy-name.md): "Deploy
 - [x] The README links to the new URL.
 - [x] The owner deletes the old Vercel project, after the two checks above pass.
 
+## 9g. Credible private AI
+
+From [the private AI record](decisions/2026-11-06-private-ai-role.md). Deadline 14 Nov 2026, 23:59 UTC.
+
+- [ ] An image call to the attested model passes the response signature check. Criteria: a sample lab report photo goes to Qwen/Qwen3.8-27B, the attestation and signature checks in `tee/near-ai.mjs` pass, and the answer is valid JSON. Do this first. From: Open questions, "An image call with the response signature check is not tested yet."
+- [ ] Wearable claims use plain code for the rule. Criteria: one function decides `days_met` and `pattern_matches_owner`; tests cover the rules in `tee/claim.mjs:8-19`; no model call decides a wearable claim; a sample claim finishes in under 20 s on a preview. From: "Wearables as plain code".
+- [ ] The contract accepts a wearable claim with no model signature. Criteria: the record states who signs the result and what the insurer trusts; contract tests cover a valid claim, a bad signature and a replay. From: Open questions, "How a wearable claim is signed on chain when no model signs it."
+- [ ] A visitor uploads a lab report and gets a result. Criteria: PDF and photo both work; the model returns only `test_found` and `rule_met`; the server stores no report; the insurer screen shows only the result and the proof; a real run passes on a preview. From: "Lab report reader".
+- [ ] The lab rule rewards a test and an improvement. Criteria: the prompt states "a test in the last 12 months, and HbA1c under 5.7% or 0.3 points better than the last test"; tests use reports in % and in mmol/mol. From: Constraints, the lab rule line.
+- [ ] Rebates pay in a test stablecoin. Criteria: the pool pays a NEP-141 token on testnet; the insurer screen shows the amount in dollars; contract tests cover the payout. From: "Stablecoin and meta transaction".
+- [ ] The member claims with no NEAR for gas. Criteria: the claim goes as a meta transaction and a relayer pays the gas; the member account holds no NEAR after the claim. From: "Stablecoin and meta transaction".
+- [ ] The README, page and video script compare with Vitality-style programs. Criteria: one short paragraph says that these programs hold raw data today and this demo pays without it; no claim without a source. From: "Real-world frame".
+- [ ] A "What you trust" table is in the README and on the page. Criteria: it names each party (device maker, lab, wearable service, NEAR AI Cloud, contract) and what each can see or fake; it says that a lab PDF can be edited and Whoop does not sign data; it names zkTLS and signed lab reports as next steps. From: "What you trust table".
+
 ## 10. Remaining plan
 
 See the table in [PLAN.md](PLAN.md): README and video.
