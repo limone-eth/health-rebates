@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BASELINE_WEEK, CLAIM_WEEK, daysInRange, MEMBERS } from "../wearable/data.mjs";
-import { buildClaimRequest, buildExplanationRequest, decide, parseResult, summarizeBaseline, toRows } from "./claim.mjs";
+import { buildClaimRequest, buildExplanationRequest, decide, evaluateWeek, explainResult, parseResult, summarizeBaseline, toRows } from "./claim.mjs";
 
 const idOf = (name) => Object.keys(MEMBERS).find((id) => MEMBERS[id].name === name);
 const rows = (name, { start, end }) =>
@@ -83,4 +83,75 @@ test("the explanation request is plain text, not a claim", () => {
   const request = buildExplanationRequest("m", [], { days_met: 5, pattern_matches_owner: true });
   assert.equal(request.response_format, undefined);
   assert.equal(request.reasoning_effort, "none");
+});
+
+// Plain code decides a wearable claim. These cases follow the rules that the model prompt gave.
+const base = { sleep_bpm: 55, hrv_rmssd_ms: 60, bedtime_minutes_after_noon: 630, day_bpm: 70 };
+const baselineRows = [
+  { ...base, sleep_bpm: 50, hrv_rmssd_ms: 50, bedtime_minutes_after_noon: 600, day_bpm: 65 },
+  { ...base, sleep_bpm: 60, hrv_rmssd_ms: 70, bedtime_minutes_after_noon: 660, day_bpm: 75 },
+];
+const day = (overrides = {}) => ({ meets_rule: true, steps: 9000, sleep_minutes: 450, ...base, ...overrides });
+const week = (count, make) => Array.from({ length: 7 }, (_, index) => (index < count ? make() : day()));
+
+test("evaluateWeek counts the rows where meets_rule is true", () => {
+  const rows = week(3, () => day({ meets_rule: false }));
+  assert.equal(evaluateWeek(baselineRows, rows).days_met, 4);
+});
+
+test("evaluateWeek gives the exact result shape", () => {
+  assert.deepEqual(parseResult(JSON.stringify(evaluateWeek(baselineRows, week(0)))), {
+    days_met: 7,
+    pattern_matches_owner: true,
+  });
+});
+
+test("two body signals out on most days sets pattern_matches_owner to false", () => {
+  const out = () => day({ sleep_bpm: 70, hrv_rmssd_ms: 30 });
+  assert.equal(evaluateWeek(baselineRows, week(4, out)).pattern_matches_owner, false);
+});
+
+test("two body signals out on three of seven days is not most days", () => {
+  const out = () => day({ sleep_bpm: 70, hrv_rmssd_ms: 30 });
+  assert.equal(evaluateWeek(baselineRows, week(3, out)).pattern_matches_owner, true);
+});
+
+test("one body signal out on each day keeps pattern_matches_owner true", () => {
+  assert.equal(evaluateWeek(baselineRows, week(7, () => day({ day_bpm: 90 }))).pattern_matches_owner, true);
+});
+
+test("steps and sleep length do not count as body signals", () => {
+  const rows = week(7, () => day({ steps: 30000, sleep_minutes: 600, sleep_bpm: 70 }));
+  assert.equal(evaluateWeek(baselineRows, rows).pattern_matches_owner, true);
+});
+
+test("a value equal to the baseline min or max is inside", () => {
+  const rows = week(7, () => day({ sleep_bpm: 60, hrv_rmssd_ms: 50, bedtime_minutes_after_noon: 600, day_bpm: 75 }));
+  assert.equal(evaluateWeek(baselineRows, rows).pattern_matches_owner, true);
+});
+
+test("each signal can be out above the max or below the min", () => {
+  for (const [low, high] of [
+    [{ sleep_bpm: 40 }, { hrv_rmssd_ms: 90 }],
+    [{ bedtime_minutes_after_noon: 500 }, { day_bpm: 99 }],
+  ]) {
+    assert.equal(evaluateWeek(baselineRows, week(7, () => day({ ...low, ...high }))).pattern_matches_owner, false);
+  }
+});
+
+test("evaluateWeek gives the expected result for each demo member", () => {
+  const result = (name) => evaluateWeek(rows(name, BASELINE_WEEK), rows(name, CLAIM_WEEK));
+  assert.deepEqual(result("A"), { days_met: 6, pattern_matches_owner: true });
+  assert.deepEqual(result("B"), { days_met: 3, pattern_matches_owner: true });
+  assert.deepEqual(result("C"), { days_met: 6, pattern_matches_owner: false });
+  assert.deepEqual([result("A"), result("B"), result("C")].map(decide), ["paid", "not paid", "held for review"]);
+});
+
+test("explainResult gives the days and the decision in plain words", () => {
+  assert.match(explainResult({ days_met: 6, pattern_matches_owner: true }), /6 of 7 days.*enough for the rebate/);
+  assert.match(explainResult({ days_met: 3, pattern_matches_owner: true }), /3 of 7 days.*needs 5.*not paid/);
+  assert.match(explainResult({ days_met: 6, pattern_matches_owner: false }), /a person will review it/);
+  for (const result of [{ days_met: 6, pattern_matches_owner: false }, { days_met: 2, pattern_matches_owner: true }]) {
+    assert.match(explainResult(result), /not your steps or sleep/);
+  }
 });

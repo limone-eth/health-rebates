@@ -1,6 +1,8 @@
-//! The rebate pool. A claim needs two signatures:
-//! - the wearable service signs (contract, member, week, request_hash): this is the member's real data;
-//! - a registered NEAR AI signer signs (model, request_hash, response_hash): the TEE model gave this answer.
+//! The rebate pool. It takes two kinds of claim:
+//! - `claim_wearable`: the wearable service applies the rule in plain code and signs
+//!   (contract, member, week, request_hash, days_met, pattern_matches_owner). No model decides it.
+//! - `claim`: the wearable service signs (contract, member, week, request_hash), and a registered
+//!   NEAR AI signer signs (model, request_hash, response_hash): the TEE model gave this answer.
 //!
 //! The insurer verifies the attestation off-chain, then registers the signer. A contract cannot check a TDX quote.
 //! Arguments of a testnet transaction are public: `days_met` and the pattern result are public, under the member's account.
@@ -99,6 +101,12 @@ fn claim_key(member: &AccountId, week: &str) -> String {
 /// The exact text that the wearable service signs.
 fn wearable_text(contract: &AccountId, member: &AccountId, week: &str, request_hash: &str) -> String {
     format!("rebate-claim:{contract}:{member}:{week}:{request_hash}")
+}
+
+/// The exact text that the wearable service signs for a result that its own code decided.
+/// The prefix is different, so a request signature is not also a result signature.
+fn result_text(contract: &AccountId, member: &AccountId, week: &str, request_hash: &str, days_met: u8, pattern: bool) -> String {
+    format!("rebate-result:{contract}:{member}:{week}:{request_hash}:{days_met}:{pattern}")
 }
 
 /// Rejects a field that is not in `known`, unless its value is null.
@@ -224,21 +232,30 @@ impl RebatePool {
 
         let (days_met, pattern_matches_owner) =
             parse_response(&response_body, &self.model, self.total_days).unwrap_or_else(|message| fail(message));
+        self.record(member, week, request_hash, days_met, pattern_matches_owner)
+    }
 
-        let outcome = if days_met < self.min_days {
-            self.totals.not_paid += 1;
-            Outcome::NotPaid
-        } else if !pattern_matches_owner {
-            self.totals.held += 1;
-            Outcome::Held
-        } else {
-            self.pay(&member);
-            self.totals.paid += 1;
-            Outcome::Paid
-        };
-        self.claims.insert(key, ClaimRecord { days_met, pattern_matches_owner, outcome, request_hash });
-        env::log_str(&format!("Claim {member} {week}: {outcome:?}"));
-        outcome
+    /// The caller is the member. The wearable service applied the rule in plain code and signed the result.
+    pub fn claim_wearable(
+        &mut self,
+        week: String,
+        request_hash: String,
+        days_met: u8,
+        pattern_matches_owner: bool,
+        wearable_signature: String,
+    ) -> Outcome {
+        let member = env::predecessor_account_id();
+        require!(!self.claims.contains_key(&claim_key(&member, &week)), "This week is already claimed");
+        require!(is_sha256_hex(&request_hash), "request_hash must be 64 lowercase hex characters");
+        require!(days_met <= self.total_days, "days_met is too large");
+
+        let signature: [u8; 65] = parse_hex(&wearable_signature).unwrap_or_else(|| fail("Bad wearable signature"));
+        let text = result_text(&env::current_account_id(), &member, &week, &request_hash, days_met, pattern_matches_owner);
+        require!(
+            recover_signer(text.as_bytes(), &signature) == Some(self.wearable_signer),
+            "The wearable service did not sign this result"
+        );
+        self.record(member, week, request_hash, days_met, pattern_matches_owner)
     }
 
     /// The insurer's decision on a held claim.
@@ -288,6 +305,24 @@ impl RebatePool {
 impl RebatePool {
     fn only_insurer(&self) {
         require!(env::predecessor_account_id() == self.insurer, "Only the insurer can do this");
+    }
+
+    /// Pays, refuses or holds, and keeps the record. Call this only after the signature checks pass.
+    fn record(&mut self, member: AccountId, week: String, request_hash: String, days_met: u8, pattern_matches_owner: bool) -> Outcome {
+        let outcome = if days_met < self.min_days {
+            self.totals.not_paid += 1;
+            Outcome::NotPaid
+        } else if !pattern_matches_owner {
+            self.totals.held += 1;
+            Outcome::Held
+        } else {
+            self.pay(&member);
+            self.totals.paid += 1;
+            Outcome::Paid
+        };
+        env::log_str(&format!("Claim {member} {week}: {outcome:?}"));
+        self.claims.insert(claim_key(&member, &week), ClaimRecord { days_met, pattern_matches_owner, outcome, request_hash });
+        outcome
     }
 
     /// The claim fails before it is recorded if the pool cannot pay, so the member can try again.
@@ -619,6 +654,79 @@ mod tests {
         let mut pool = pool();
         claim(&mut pool, "c.testnet", &result(6, false));
         pool.resolve_held(account("c.testnet"), WEEK.to_string(), true);
+    }
+
+    fn result_sign(signer: &SigningKey, member: &str, days: u8, pattern: bool) -> String {
+        hex(&sign(signer, &result_text(&account("pool.testnet"), &account(member), WEEK, HASH, days, pattern)))
+    }
+
+    /// A wearable claim by `member`, signed by the wearable service.
+    fn claim_wearable(pool: &mut RebatePool, member: &str, days: u8, pattern: bool) -> Outcome {
+        context(member, NearToken::from_near(10));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), days, pattern, result_sign(&wearable_key(), member, days, pattern))
+    }
+
+    #[test]
+    fn a_wearable_claim_pays_holds_or_refuses_from_the_signed_result() {
+        let mut pool = pool();
+        assert_eq!(claim_wearable(&mut pool, "a.testnet", 6, true), Outcome::Paid);
+        // Each context() call clears the receipts, so check the payout before the next claim.
+        assert_eq!(get_created_receipts().iter().filter(|r| r.receiver_id == account("a.testnet")).count(), 1);
+        assert_eq!(claim_wearable(&mut pool, "b.testnet", 3, true), Outcome::NotPaid);
+        assert_eq!(claim_wearable(&mut pool, "c.testnet", 6, false), Outcome::Held);
+        let record = pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap();
+        assert_eq!(record, ClaimRecord { days_met: 6, pattern_matches_owner: true, outcome: Outcome::Paid, request_hash: HASH.to_string() });
+        assert_eq!(pool.get_totals(), Totals { paid: 1, not_paid: 1, held: 1, ..Totals::default() });
+        assert!(get_created_receipts().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "wearable service did not sign this result")]
+    fn a_wearable_claim_rejects_a_signature_from_another_key() {
+        let mut pool = pool();
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, result_sign(&key(9), "a.testnet", 6, true));
+    }
+
+    /// B missed the rule, and sends a better result with the signature for the real one.
+    #[test]
+    #[should_panic(expected = "wearable service did not sign this result")]
+    fn a_wearable_claim_rejects_a_changed_result() {
+        let mut pool = pool();
+        context("b.testnet", NearToken::from_near(10));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, result_sign(&wearable_key(), "b.testnet", 3, true));
+    }
+
+    #[test]
+    #[should_panic(expected = "wearable service did not sign this result")]
+    fn a_wearable_claim_rejects_a_result_signed_for_another_member() {
+        let mut pool = pool();
+        context("b.testnet", NearToken::from_near(10));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, result_sign(&wearable_key(), "a.testnet", 6, true));
+    }
+
+    /// The old request signature says "this is the member's data", not "this is the result".
+    #[test]
+    #[should_panic(expected = "wearable service did not sign this result")]
+    fn a_wearable_claim_rejects_a_request_signature() {
+        let mut pool = pool();
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, wearable_sign(&wearable_key(), "a.testnet"));
+    }
+
+    #[test]
+    #[should_panic(expected = "already claimed")]
+    fn a_wearable_claim_rejects_a_replay() {
+        let mut pool = pool();
+        claim_wearable(&mut pool, "a.testnet", 6, true);
+        claim_wearable(&mut pool, "a.testnet", 6, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "days_met is too large")]
+    fn a_wearable_claim_rejects_days_met_above_the_week() {
+        let mut pool = pool();
+        claim_wearable(&mut pool, "a.testnet", 8, true);
     }
 
     #[test]

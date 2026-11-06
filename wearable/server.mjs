@@ -3,7 +3,7 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { buildClaimRequest, toRows } from "../tee/claim.mjs";
+import { evaluateWeek, summarizeBaseline, toRows } from "../tee/claim.mjs";
 import { BASELINE_WEEK, CLAIM_WEEK, daysInRange, hasMember, MEMBERS } from "./data.mjs";
 
 const ROUTE = /^\/api\/v1\/users\/([^/]+)\/summaries\/(activity|sleep)$/;
@@ -15,22 +15,24 @@ const NEAR_ACCOUNT = /^(?=.{2,64}$)[a-z0-9]+([-_.][a-z0-9]+)*$/;
 const rowsFor = (userId, { start, end }) =>
   toRows(daysInRange(userId, "activity", start, end), daysInRange(userId, "sleep", start, end));
 
-// Reads the caller's fields, and uses no hash, request or model from them.
+// Reads the caller's fields, and uses no hash or result from them.
 // The caller's API key stands in for a member login. A real service must link one NEAR account to each member.
-export async function buildClaim({ model, contract, signMessage }, { user_id: userId, near_account: nearAccount, week } = {}) {
+export async function buildClaim({ contract, signMessage }, { user_id: userId, near_account: nearAccount, week } = {}) {
   if (!hasMember(userId)) return [404, { detail: "User not found" }];
   if (week !== CLAIM_WEEK.start) return [422, { detail: "Only the current claim week can be claimed" }];
   if (typeof nearAccount !== "string" || !NEAR_ACCOUNT.test(nearAccount)) return [422, { detail: "Bad near_account" }];
 
-  return [200, await signRows({ model, contract, signMessage }, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK), nearAccount, week)];
+  return [200, await signRows({ contract, signMessage }, rowsFor(userId, BASELINE_WEEK), rowsFor(userId, CLAIM_WEEK), nearAccount, week)];
 }
 
 // No HTTP route gives this function rows from a caller. Only the demo's own upload path in web/live.mjs does, and the screen says that an upload has no proof.
-export async function signRows({ model, contract, signMessage }, baselineRows, claimRows, nearAccount, week) {
-  const requestBody = JSON.stringify(buildClaimRequest(model, baselineRows, claimRows));
-  const requestHash = createHash("sha256").update(requestBody).digest("hex");
-  const signature = await signMessage(`rebate-claim:${contract}:${nearAccount}:${week}:${requestHash}`);
-  return { request_body: requestBody, request_hash: requestHash, wearable_signature: signature };
+// Plain code decides the result, so no model sees the rows. The hash binds the result to the exact input rows.
+export async function signRows({ contract, signMessage }, baselineRows, claimRows, nearAccount, week) {
+  const input = JSON.stringify({ owner_baseline: summarizeBaseline(baselineRows), claim_week: claimRows });
+  const requestHash = createHash("sha256").update(input).digest("hex");
+  const { days_met: daysMet, pattern_matches_owner: patternMatches } = evaluateWeek(baselineRows, claimRows);
+  const signature = await signMessage(`rebate-result:${contract}:${nearAccount}:${week}:${requestHash}:${daysMet}:${patternMatches}`);
+  return { request_hash: requestHash, days_met: daysMet, pattern_matches_owner: patternMatches, wearable_signature: signature };
 }
 
 async function createClaim(req, claims) {
@@ -58,7 +60,7 @@ const parseDate = (value) => {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : null;
 };
 
-// With `claims` ({ model, contract, signMessage }), the service also builds and signs claim requests.
+// With `claims` ({ contract, signMessage }), the service also decides and signs claim results.
 export function createWearableServer({ apiKey = "demo-key", claims } = {}) {
   return createServer(async (req, res) => {
     const send = (status, body) => {

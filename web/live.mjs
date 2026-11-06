@@ -1,10 +1,10 @@
-// A real claim: new member account, wearable request, attestation, TEE completion, signature, on-chain claim.
+// A real wearable claim: new member account, a result that the wearable service decides and signs, on-chain claim.
+// No model decides a wearable claim. The attested model is for lab reports.
 // Loaded only when keys exist, so the read-only app needs no npm install.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { accountWith, call, hasDevAccount, KeyPair, loadDevAccount, mustCall, NEAR, privateKeyToAccount, sleep, waitForAccount } from "../chain/near.mjs";
 import { EXPLORER, view } from "../chain/view.mjs";
-import { buildExplanationRequest, decide, parseResult } from "../tee/claim.mjs";
-import { createNearAi } from "../tee/near-ai.mjs";
+import { decide, explainResult } from "../tee/claim.mjs";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
 import { buildClaim, signRows } from "../wearable/server.mjs";
 
@@ -13,11 +13,8 @@ const MEMBER_DEPOSIT = (NEAR * 7n) / 100n;
 const CLAIM_READ_ATTEMPTS = 15;
 const CLAIM_READ_DELAY_MS = 1000;
 const idOf = Object.fromEntries(Object.entries(MEMBERS).map(([id, member]) => [member.name, id]));
-const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 export async function createLive({ pool, model }) {
-  const apiKey = process.env.NEARAI_CLOUD_API_KEY;
-  if (!apiKey) throw new Error("NEARAI_CLOUD_API_KEY is not set");
   if (!hasDevAccount()) throw new Error("No dev account: chain/.env.testnet does not exist");
 
   const { accountId: rootId, nearKey, wearableKey } = loadDevAccount();
@@ -28,10 +25,9 @@ export async function createLive({ pool, model }) {
   if (config.model !== model) throw new Error("This pool publishes another model");
 
   const wearableSigner = privateKeyToAccount(wearableKey);
-  const nearAi = createNearAi({ apiKey, model });
 
   // The wearable service runs in this process for the demo, because the host does not let a function open a local server.
-  const claims = { model, contract: pool, signMessage: (message) => wearableSigner.signMessage({ message }) };
+  const claims = { contract: pool, signMessage: (message) => wearableSigner.signMessage({ message }) };
 
   async function requestClaim(name, nearAccount, upload) {
     if (upload) return signRows(claims, upload.baselineRows, upload.claimRows, nearAccount, CLAIM_WEEK.start);
@@ -55,51 +51,34 @@ export async function createLive({ pool, model }) {
     const stamp = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
     const memberId = `${name.toLowerCase()}-${stamp}.${rootId}`;
 
-    // The attestation passes first, or this throws before member data goes to the model.
-    const signers = await nearAi.attest();
-    onStep("attestation", `Intel signature passed on each quote. ${signers.length} model signers.`);
-
     await root.createSubAccount({ accountOrPrefix: memberId, publicKey: keyPair.getPublicKey(), nearToTransfer: MEMBER_DEPOSIT });
     const member = accountWith(memberId, keyPair);
     await waitForAccount(member);
     onStep("account", `New member account ${memberId}.`);
 
     const claim = await requestClaim(name, memberId, upload);
-    onStep("wearable", upload ? "This demo's key signed the uploaded week." : "The wearable service built the request and signed its hash.");
-
-    const completion = await nearAi.complete(claim.request_body);
-    if (sha256(completion.requestBody) !== claim.request_hash) throw new Error("Sent bytes do not match the signed hash");
-    const signature = await nearAi.verifySignature(completion, signers);
-    const result = parseResult(completion.content);
-    onStep("tee", `The TEE model answered, and a signer from the attestation signed the answer. Decision: ${decide(result)}.`);
-
-    const explanation = await nearAi.complete(
-      buildExplanationRequest(model, JSON.parse(JSON.parse(claim.request_body).messages[1].content).claim_week, result),
+    const result = { days_met: claim.days_met, pattern_matches_owner: claim.pattern_matches_owner };
+    onStep(
+      "wearable",
+      `${upload ? "This demo's key" : "The wearable service"} applied the rule in code and signed the result. Decision: ${decide(result)}.`,
     );
-    onStep("explanation", "The explanation is ready. It stays off-chain.");
 
-    if (!(await view(pool, "is_registered_signer", { signer: signature.signing_address }))) {
-      await mustCall(root, pool, "register_signer", { signer: signature.signing_address });
-      onStep("signer", "The insurer registered the attested signer.");
-    }
-
-    const { hash, failure } = await call(member, pool, "claim", {
+    const { hash, failure } = await call(member, pool, "claim_wearable", {
       week: CLAIM_WEEK.start,
       request_hash: claim.request_hash,
-      response_body: completion.responseBody.toString("utf8"),
-      ai_signature: signature.signature,
+      days_met: claim.days_met,
+      pattern_matches_owner: claim.pattern_matches_owner,
       wearable_signature: claim.wearable_signature,
     });
     if (failure) throw new Error(`claim failed: ${failure}`);
     await waitForClaim(memberId);
-    onStep("chain",`The contract checked both signatures. ${EXPLORER}/${hash}`);
+    onStep("chain", `The contract checked the signature. ${EXPLORER}/${hash}`);
 
     return {
       account: memberId,
       tx: hash,
-      signer: signature.signing_address,
       recorded_on: new Date().toISOString().slice(0, 10),
-      explanation: explanation.content,
+      explanation: explainResult(result),
     };
   }
 

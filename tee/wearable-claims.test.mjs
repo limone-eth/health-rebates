@@ -1,4 +1,4 @@
-// The wearable service builds the claim request and signs only that request.
+// The wearable service applies the rule in plain code and signs the result. No model decides a wearable claim.
 // This test is here because it needs viem, and the wearable service has no dependencies.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -6,10 +6,11 @@ import { after, before, test } from "node:test";
 import { recoverMessageAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
+import { BASELINE_WEEK, daysInRange } from "../wearable/data.mjs";
 import { createWearableServer } from "../wearable/server.mjs";
+import { evaluateWeek, summarizeBaseline, toRows } from "./claim.mjs";
 
 const KEY = "test-key";
-const MODEL = "test/model";
 const POOL = "pool.testnet";
 const MEMBER = "a-1.pool.testnet";
 const signer = privateKeyToAccount(generatePrivateKey());
@@ -20,7 +21,7 @@ let base;
 before(async () => {
   server = createWearableServer({
     apiKey: KEY,
-    claims: { model: MODEL, contract: POOL, signMessage: (message) => signer.signMessage({ message }) },
+    claims: { contract: POOL, signMessage: (message) => signer.signMessage({ message }) },
   });
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
@@ -36,32 +37,52 @@ const post = (body, { key = KEY, target = "/mock/claims" } = {}) =>
 
 const goodBody = (overrides = {}) => ({ user_id: idOf.A, near_account: MEMBER, week: CLAIM_WEEK.start, ...overrides });
 
-test("the service returns a request that it built, and signs the hash of those bytes", async () => {
+const rowsFor = (name, { start, end }) =>
+  toRows(daysInRange(idOf[name], "activity", start, end), daysInRange(idOf[name], "sleep", start, end));
+
+test("the service signs the result that its code decided, and the hash of the input rows", async () => {
   const res = await post(goodBody());
   assert.equal(res.status, 200);
-  const { request_body: requestBody, request_hash: requestHash, wearable_signature: signature } = await res.json();
+  const body = await res.json();
+  assert.deepEqual(Object.keys(body).sort(), ["days_met", "pattern_matches_owner", "request_hash", "wearable_signature"]);
 
-  assert.equal(requestHash, createHash("sha256").update(requestBody).digest("hex"));
-  const message = `rebate-claim:${POOL}:${MEMBER}:${CLAIM_WEEK.start}:${requestHash}`;
-  assert.equal((await recoverMessageAddress({ message, signature })).toLowerCase(), signer.address.toLowerCase());
+  const input = JSON.stringify({ owner_baseline: summarizeBaseline(rowsFor("A", BASELINE_WEEK)), claim_week: rowsFor("A", CLAIM_WEEK) });
+  assert.equal(body.request_hash, createHash("sha256").update(input).digest("hex"));
+  assert.deepEqual(
+    { days_met: body.days_met, pattern_matches_owner: body.pattern_matches_owner },
+    evaluateWeek(rowsFor("A", BASELINE_WEEK), rowsFor("A", CLAIM_WEEK)),
+  );
 
-  const request = JSON.parse(requestBody);
-  assert.equal(request.model, MODEL);
-  assert.equal(JSON.parse(request.messages[1].content).claim_week.length, 7);
+  const message = `rebate-result:${POOL}:${MEMBER}:${CLAIM_WEEK.start}:${body.request_hash}:6:true`;
+  const recovered = await recoverMessageAddress({ message, signature: body.wearable_signature });
+  assert.equal(recovered.toLowerCase(), signer.address.toLowerCase());
 });
 
-test("two calls for one member and week give the same request bytes", async () => {
+test("the service returns no health data", async () => {
+  const text = await (await post(goodBody())).text();
+  for (const word of ["steps", "sleep", "bpm", "hrv", "bedtime", "claim_week"]) assert.ok(!text.includes(word), word);
+});
+
+test("each sample member gets the expected result", async () => {
+  const result = async (name) => {
+    const { days_met: days, pattern_matches_owner: pattern } = await (await post(goodBody({ user_id: idOf[name] }))).json();
+    return [days, pattern];
+  };
+  assert.deepEqual([await result("A"), await result("B"), await result("C")], [[6, true], [3, true], [6, false]]);
+});
+
+test("two calls for one member and week give the same signature", async () => {
   const first = await (await post(goodBody())).json();
   const second = await (await post(goodBody())).json();
-  assert.equal(first.request_body, second.request_body);
   assert.equal(first.wearable_signature, second.wearable_signature);
 });
 
-test("the service ignores a hash, a request or a model from the caller", async () => {
+test("the service ignores a hash or a result from the caller", async () => {
   const plain = await (await post(goodBody())).json();
-  const forced = await (await post(goodBody({ request_hash: "ab".repeat(32), request_body: "{}", model: "other/model" }))).json();
-  assert.equal(forced.request_hash, plain.request_hash);
-  assert.equal(forced.request_body, plain.request_body);
+  const forced = await (await post(goodBody({ request_hash: "ab".repeat(32), days_met: 7, pattern_matches_owner: true, user_id: idOf.B }))).json();
+  assert.equal(forced.days_met, 3);
+  assert.notEqual(forced.request_hash, "ab".repeat(32));
+  assert.notEqual(forced.request_hash, plain.request_hash);
 });
 
 test("the service refuses a bad claim", async () => {

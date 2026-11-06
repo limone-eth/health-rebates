@@ -49,10 +49,13 @@ export function toRows(activityDays, sleepDays) {
   });
 }
 
+// Signals that the member cannot easily change. Steps and sleep length are not here: a member can improve these.
+const BODY_SIGNALS = ["sleep_bpm", "hrv_rmssd_ms", "bedtime_minutes_after_noon", "day_bpm"];
+
 // A summary, not the 28 raw days: the model needs no more than this.
 export function summarizeBaseline(rows) {
   const summary = { days: rows.length };
-  for (const key of ["sleep_bpm", "hrv_rmssd_ms", "bedtime_minutes_after_noon", "day_bpm"]) {
+  for (const key of BODY_SIGNALS) {
     const values = rows.map((row) => row[key]);
     summary[key] = {
       min: Math.min(...values),
@@ -61,6 +64,19 @@ export function summarizeBaseline(rows) {
     };
   }
   return summary;
+}
+
+// Decides a wearable claim with plain code, so no model decides it. Same rules as SYSTEM above.
+// pattern_matches_owner is false only if, on most days, two or more body signals are outside the baseline min to max.
+export function evaluateWeek(baselineRows, claimRows) {
+  const baseline = summarizeBaseline(baselineRows);
+  const outside = (row) =>
+    BODY_SIGNALS.filter((key) => row[key] < baseline[key].min || row[key] > baseline[key].max).length;
+  const daysOut = claimRows.filter((row) => outside(row) >= 2).length;
+  return {
+    days_met: claimRows.filter((row) => row.meets_rule).length,
+    pattern_matches_owner: daysOut <= claimRows.length / 2,
+  };
 }
 
 export function buildClaimRequest(model, baselineRows, claimRows) {
@@ -98,6 +114,17 @@ export function parseResult(content) {
 export function decide({ days_met: daysMet, pattern_matches_owner: patternMatches }) {
   if (daysMet < RULE.minDays) return "not paid";
   return patternMatches ? "paid" : "held for review";
+}
+
+// For the member only, so it can repeat what the member already knows. Plain text from code: no model call.
+export function explainResult({ days_met: daysMet, pattern_matches_owner: patternMatches }) {
+  const days = `You met the goals on ${daysMet} of ${RULE.days} days.`;
+  const privacy = "Your insurer sees this result, not your steps or sleep.";
+  if (daysMet < RULE.minDays) return `${days} The rebate needs ${RULE.minDays}, so this week is not paid. ${privacy}`;
+  if (!patternMatches) {
+    return `${days} This week looks different from your usual pattern, so a person will review it before payment. ${privacy}`;
+  }
+  return `${days} That is enough for the rebate, and the week matches your usual pattern. ${privacy}`;
 }
 
 // A separate completion for the member only. It can repeat health data, so it never goes on-chain.

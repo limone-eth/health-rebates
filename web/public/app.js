@@ -8,14 +8,11 @@ const STEP_SETTLE_MS = 420;
 const HELD_POLL_ATTEMPTS = 12;
 const HELD_POLL_MS = 1500;
 
+// A wearable claim needs no model: code applies the rule and the wearable service signs the result.
 const STEPS = [
-  ["attestation", "Intel confirmed the sealed machine"],
   ["account", "Test account opened"],
-  ["wearable", "Your week signed"],
-  ["tee", "Good days counted"],
-  ["explanation", "Summary written"],
-  ["signer", "Model's key registered"],
-  ["chain", "Both signatures checked"],
+  ["wearable", "Good days counted and signed"],
+  ["chain", "Signature checked"],
 ];
 
 const ICONS = {
@@ -229,7 +226,7 @@ function uploadHtml() {
     <p class="lab">${esc(app.upload.fileName)}</p>
     <ul class="rule">
       <li>This server reads your file during the claim and keeps nothing.</li>
-      <li>A model in a sealed machine reads your week.</li>
+      <li>Code on this server counts your good days. No model reads your week.</li>
       <li>Your good days and the result stay public on a test network, under a made-up name.</li>
       <li>This week has no proof from a wearable service, so anyone could type these numbers.</li>
     </ul>
@@ -246,7 +243,7 @@ function connectHtml(maker) {
     <p class="lab">Connect ${esc(name)}</p>
     <ul class="rule">
       <li>${esc(name)} sends this server your last 36 days during the claim. The server keeps no data and no token.</li>
-      <li>A model in a sealed machine reads your week.</li>
+      <li>Code on this server counts your good days. No model reads your week.</li>
       <li>Your good days and the result stay public on a test network, under a made-up name.</li>
       <li>This server signs your week with its own key. ${esc(name)} does not sign it.</li>
       ${maker === "whoop" ? `<li>${esc(WHOOP_NOTE)}</li>` : ""}
@@ -260,8 +257,7 @@ function connectHtml(maker) {
 
 function stepStates() {
   const done = new Set(app.run.done);
-  const list = STEPS.filter(([id]) => id !== "signer" || done.has("signer"));
-  const nextId = list.find(([id]) => !done.has(id))?.[0];
+  const nextId = STEPS.find(([id]) => !done.has(id))?.[0];
   return (id) => (done.has(id) ? "done" : id === nextId ? "now" : "");
 }
 
@@ -269,11 +265,9 @@ function stepsHtml() {
   if (!app.run) return "";
   const stateOf = stepStates();
   const enter = app.run.done.length === 0;
-  // The signer step runs only for a new signer, so it shows only when it happens.
   return `<ol class="steps ${enter ? "enter" : ""}">${STEPS.map(([id, text], index) => {
     const state = stateOf(id);
-    const hidden = id === "signer" && state !== "done";
-    return `<li data-step="${id}" class="${state}" style="--i:${index}" ${hidden ? "hidden" : ""}><span class="mark"><span class="dot"></span>${icon("check")}</span><span>${esc(text)}<span class="sr-only">${state === "done" ? " Done." : ""}</span></span></li>`;
+    return `<li data-step="${id}" class="${state}" style="--i:${index}"><span class="mark"><span class="dot"></span>${icon("check")}</span><span>${esc(text)}<span class="sr-only">${state === "done" ? " Done." : ""}</span></span></li>`;
   }).join("")}</ol>`;
 }
 
@@ -286,7 +280,6 @@ function updateSteps() {
     const id = row.dataset.step;
     const state = stateOf(id);
     row.className = state;
-    if (id === "signer") row.hidden = state !== "done";
     row.querySelector(".sr-only").textContent = state === "done" ? " Done." : "";
   });
 }
@@ -354,34 +347,42 @@ function stubHtml(m, index, data, arrive) {
   </article>`;
 }
 
-function secondSignature(m) {
-  if (m.member !== YOU) return "The model and the wearable service";
+function signedBy(m) {
+  if (m.member !== YOU) return "The wearable service read the week, applied the rule in code and signed the result";
   const name = TRACKER_NAMES[m.source];
-  if (!name) return "The model and this demo's key. An uploaded week has no proof from a wearable service.";
-  return `The model and this demo's key. This server read the week from ${name} and signed it. ${name} did not sign it.`;
+  if (!name) return "This demo's key signed the result. An uploaded week has no proof from a wearable service.";
+  return `This server read the week from ${name}, applied the rule and signed the result. ${name} did not sign it.`;
+}
+
+// An older claim went through the model, and keeps the checks that it had.
+function modelProofRows(m, row, accepted) {
+  const signerKnown = accepted && m.signer_registered === true;
+  return `
+      ${row(signerKnown, "The model ran in a sealed machine", "Intel signed a report on it")}
+      ${row(signerKnown, "The key belongs to that machine", "Intel's report names it")}
+      ${row(accepted, "The answer is unchanged", "Its signature matches")}
+      ${row(accepted, "Two signatures passed", "The model and the wearable service")}`;
 }
 
 // Real checks only: each row reads what the chain holds for this claim.
 function proofHtml(m, who) {
   const accepted = Boolean(m.outcome);
-  const signerKnown = accepted && m.signer_registered === true;
   const row = (ok, point, context) =>
     `<li>${icon(ok ? "check" : "minus")}<span>${esc(point)}</span><span class="ctx">${esc(context)}</span><span class="lab status ${ok ? "" : "off"}">${ok ? "Passed" : "Not shown"}</span></li>`;
   const publicFacts = `Good days, usual week and ${m.payout ? "payment" : "outcome"}, under a made-up name`;
   const txUrl = `${app.status.explorer}/${encodeURIComponent(m.tx)}`;
-  const model = app.insurer?.model;
+  const viaModel = Boolean(m.signer);
 
   return `<section class="proof" aria-label="What was checked">
     <h2 tabindex="-1">What was checked for ${esc(who)}</h2>
     <p class="lab when">Checked on ${esc(longDate(m.recorded_on))}</p>
     <ul class="checks">
-      ${row(signerKnown, "The model ran in a sealed machine", "Intel signed a report on it")}
-      ${row(signerKnown, "The key belongs to that machine", "Intel's report names it")}
-      ${row(accepted, "The answer is unchanged", "Its signature matches")}
-      ${row(accepted, "Two signatures passed", secondSignature(m))}
+      ${viaModel ? modelProofRows(m, row, accepted) : `
+      ${row(accepted, "The result is signed", signedBy(m))}
+      ${row(accepted, "The result is unchanged", "The contract checked the signature before it paid")}`}
       <li>${icon("arrow")}<span>Some facts are public</span><span class="ctx">${esc(publicFacts)}</span><a class="lab status" href="${esc(txUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open the public record, in a new tab">See record</a></li>
-      <li>${icon("info")}<span>Who marks each day</span><span class="ctx">Code outside the sealed machine. The model counts the marks.</span><span class="lab status">Not sealed</span></li>
-      <li>${icon("minus")}<span>The software in the sealed machine</span><span class="ctx">Its start-up file matches Intel's report. No one has confirmed that the software is safe.</span><span class="lab status off">Not proven</span></li>
+      ${viaModel ? "" : `<li>${icon("info")}<span>No model saw the week</span><span class="ctx">The rule is plain code, so the wearable service needs no model to apply it.</span><span class="lab status">Code</span></li>`}
+      <li>${icon("minus")}<span>Who you trust</span><span class="ctx">${viaModel ? "Code outside the sealed machine marks each day. No one has confirmed that the model's software is safe." : "The wearable service sees your week and signs the result. The insurer does not see the week."}</span><span class="lab status off">Not proven</span></li>
     </ul>
     <details class="tech">
       <summary>Technical details</summary>
@@ -390,9 +391,9 @@ function proofHtml(m, who) {
         ${m.payout ? `<dt class="lab">Rebate amount</dt><dd>${esc(m.payout)} (test tokens)</dd>` : ""}
         <dt class="lab">Member account</dt><dd>${esc(m.account)}</dd>
         <dt class="lab">Pool</dt><dd>${esc(app.status.pool)}</dd>
-        ${model ? `<dt class="lab">Model</dt><dd>${esc(model)}</dd>` : ""}
-        <dt class="lab">Model signer</dt><dd>${esc(m.signer)}</dd>
-        <dt class="lab">Request hash</dt><dd>${esc(m.request_hash)}</dd>
+        ${viaModel && app.insurer?.model ? `<dt class="lab">Model</dt><dd>${esc(app.insurer.model)}</dd>` : ""}
+        ${viaModel ? `<dt class="lab">Model signer</dt><dd>${esc(m.signer)}</dd>` : ""}
+        <dt class="lab">${viaModel ? "Request hash" : "Input hash"}</dt><dd>${esc(m.request_hash)}</dd>
       </dl>
     </details>
   </section>`;
