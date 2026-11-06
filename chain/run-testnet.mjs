@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { actions, KeyPair, teraToGas } from "near-api-js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { accountWith, call, createDevAccount, hasDevAccount, loadDevAccount, mustCall, NEAR, sleep, waitForAccount } from "./near.mjs";
+import { accountWith, createDevAccount, hasDevAccount, loadDevAccount, mustCall, NEAR, nearBalance, relayCall, sleep, waitForAccount } from "./near.mjs";
 import { EXPLORER, view } from "./view.mjs";
 import { CLAIM_WEEK } from "../wearable/data.mjs";
 import { RULE } from "../wearable/rule.mjs";
@@ -66,8 +66,9 @@ const memberIds = Object.fromEntries(["A", "B", "C"].map((name) => [name, `${nam
 
 await root.createSubAccount({ accountOrPrefix: tokenId, publicKey: keyPair.getPublicKey(), nearToTransfer: NEAR * 2n });
 await root.createSubAccount({ accountOrPrefix: poolId, publicKey: keyPair.getPublicKey(), nearToTransfer: (NEAR * 5n) / 2n });
+// Members get no NEAR. Each claim is a meta transaction, and the insurer's account relays it and pays the gas.
 for (const id of Object.values(memberIds)) {
-  await root.createSubAccount({ accountOrPrefix: id, publicKey: keyPair.getPublicKey(), nearToTransfer: (NEAR * 3n) / 10n });
+  await root.createSubAccount({ accountOrPrefix: id, publicKey: keyPair.getPublicKey(), nearToTransfer: 0n });
 }
 const pool = accountFor(poolId);
 const token = accountFor(tokenId);
@@ -119,7 +120,7 @@ const otherKey = privateKeyToAccount(generatePrivateKey());
 await mustCall(root, poolId, "register_signer", { signer: testAi.address });
 
 async function expectRejected(name, account, args, expected, method) {
-  const { failure, hash } = await call(account, poolId, method, args);
+  const { failure, hash } = await relayCall(root, account, poolId, method, args);
   check(`testnet rejects: ${name}`, Boolean(failure?.includes(expected)), failure ? `tx ${hash}` : "the call passed");
 }
 
@@ -184,7 +185,7 @@ for (const { name, baselineRows, claimRows } of memberData) {
   const args = { week: WEEK, ...signed };
   firstClaim ??= { member, args };
 
-  const { hash, failure } = await call(member, poolId, "claim_wearable", args);
+  const { hash, failure } = await relayCall(root, member, poolId, "claim_wearable", args);
   links[name] = `${EXPLORER}/${hash}`;
   webMembers[name] = {
     account: member.accountId,
@@ -224,7 +225,7 @@ for (const [name, sampleId] of LAB_CLAIMS) {
   const args = await labClaimArgs({ contract: poolId, member: member.accountId, year: LAB_YEAR, read, signMessage: claims.signMessage });
   firstLab ??= { member, args };
   const before = await tusdOf(member.accountId);
-  const { hash, failure } = await call(member, poolId, "claim_lab", args);
+  const { hash, failure } = await relayCall(root, member, poolId, "claim_lab", args);
   links[`${name} lab`] = `${EXPLORER}/${hash}`;
   check(`${name}: the lab claim for ${sampleId} succeeds`, !failure, failure ?? `tx ${hash}, ${((Date.now() - started) / 1000).toFixed(1)} s`);
   await sleep(5000);
@@ -246,6 +247,11 @@ for (const [name, sampleId] of LAB_CLAIMS) {
 await expectRejected("a second lab claim for the same year", firstLab.member, firstLab.args, "already claimed", "claim_lab");
 await expectRejected("a second claim for the same week", firstClaim.member, firstClaim.args, "already claimed", "claim_wearable");
 await expectRejected("a held claim resolved by a member", members.C, { member: members.C.accountId, week: WEEK, approve: true }, "Only the insurer", "resolve_held");
+
+for (const [name, member] of Object.entries(members)) {
+  const balance = await nearBalance(member);
+  check(`${name}: holds 0 NEAR after the claims, because the relayer paid the gas`, balance === 0n, `${balance}`);
+}
 
 const totals = await view(poolId, "get_totals");
 check("totals on-chain", totals.paid === 2 && totals.not_paid === 2 && totals.held === 1, JSON.stringify(totals));

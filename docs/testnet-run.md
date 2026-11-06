@@ -1,33 +1,35 @@
 # Testnet run
 
-**Result: on 6 Nov, wearable claims and lab claims on NEAR testnet gave the expected tUSD payouts. All checks passed in one run. A wearable claim took about 4 s.**
+**Result: on 6 Nov, wearable claims and lab claims on NEAR testnet gave the expected tUSD payouts. All checks passed in one run. A wearable claim took 2 to 4 s. Each member sent its claims as meta transactions, and holds 0 NEAR after them.**
 
-Pool: `pool-mw4x0ixq.rebates-demo-mw12j3o6.testnet`
-Token: `tusd-mw4x0ixq.rebates-demo-mw12j3o6.testnet` (tUSD, a test token with no value, 6 decimals)
+Pool: `pool-mw4xp1cv.rebates-demo-mw12j3o6.testnet`
+Token: `tusd-mw4xp1cv.rebates-demo-mw12j3o6.testnet` (tUSD, a test token with no value, 6 decimals)
 
 Wearable claims:
 
 | Member | `days_met` | `pattern_matches_owner` | Outcome | Rebate | Transaction |
 |---|---|---|---|---|---|
-| A | 6 | true | Paid | 10 tUSD | [HWV73yj5…](https://testnet.nearblocks.io/txns/HWV73yj5qQP3HEoejxctWN8j93mmQYJB6jsJKqjM9P36) |
-| B | 3 | true | NotPaid | none | [Gbaoqt85…](https://testnet.nearblocks.io/txns/Gbaoqt858MSZv2Yz1nrF8ztnehxyiQw1SqLqVi2U7pbW) |
-| C | 6 | false | Held | none | [3MyPsGci…](https://testnet.nearblocks.io/txns/3MyPsGciCeR8vtzBqkomWTT3Va7wnaGQqLgtU6qNFeBq) |
+| A | 6 | true | Paid | 10 tUSD | [BQVicMD3…](https://testnet.nearblocks.io/txns/BQVicMD3NTX3G4TGT2Ee5sSA5FHERo92sxn5kJ8or2bd) |
+| B | 3 | true | NotPaid | none | [41MVGWEm…](https://testnet.nearblocks.io/txns/41MVGWEmYGjvUVYkRjqHpnnk72M1YnqdRuAuBaMPTYK8) |
+| C | 6 | false | Held | none | [4mDX2Cej…](https://testnet.nearblocks.io/txns/4mDX2CejpVer1uGxXrZv1MCZN2niH2TYSMcQQfE5BbGd) |
 
 Lab claims, with synthetic sample reports read by the attested model on NEAR AI Cloud:
 
 | Sample report | `test_found` | `rule_met` | Outcome | Rebate | Transaction |
 |---|---|---|---|---|---|
-| 0.4 points better, in % | true | true | Paid | 10 tUSD | [28F2d9QY…](https://testnet.nearblocks.io/txns/28F2d9QYveqsnWECvMFYgLmgMZmvPdGL5Hh14nyouzB5) |
-| Over 5.7%, in mmol/mol | true | false | NotPaid | none | [8xANSbbM…](https://testnet.nearblocks.io/txns/8xANSbbMHCwL6Pu8tUPniPRQYp5iF82km9PyYiHNTNGw) |
+| 0.4 points better, in % | true | true | Paid | 10 tUSD | [AhM91Ffo…](https://testnet.nearblocks.io/txns/AhM91Ffot4a78Y7idhY5NgDACYT7mnmFYTN4Jqm21TVN) |
+| Over 5.7%, in mmol/mol | true | false | NotPaid | none | [8e5anW9Z…](https://testnet.nearblocks.io/txns/8e5anW9Z3Y9qKFW4cZywgKTaLHDinRP1Boo8bZf95TwF) |
 
 ## What the run does
 
-1. It deploys the tUSD token and a new pool. The pool registers with the token, and the insurer sends the pool 1000 tUSD with `ft_transfer_call`.
+1. It deploys the tUSD token, a new pool and three member accounts with 0 NEAR. A small account needs no NEAR for its storage (NEP-448). The pool registers with the token, and the insurer sends the pool 1000 tUSD with `ft_transfer_call`.
 2. It sends claims that the contract must reject.
 3. For A, B and C, the wearable service applies the rule in plain code and signs the result. No model reads the week. Each member sends the signed result to `claim_wearable`.
 4. For a paid claim, the contract registers the member with the token (`storage_deposit`), then sends 10 tUSD with `ft_transfer`. If the transfer fails, the callback puts the claim back to `Held` and returns the funds to the pool balance.
 5. For two sample lab reports, it checks the NEAR AI attestation, and the insurer registers the model signer. The attested model reads the HbA1c values from the report image, and the NEAR AI signature on its answer is checked. Plain code applies the lab rule to the values, and the service signs the result. The member sends `claim_lab` with the request hash, the response hash, the result and both signatures. No value and no date go on-chain.
-6. It reads the records, the totals and the tUSD balances from the chain.
+6. It reads the records, the totals and the tUSD balances from the chain, and checks that each member still holds 0 NEAR.
+
+Each member call is a meta transaction (NEP-366). The member signs the call, and the insurer's account sends it and pays the gas. The contract still sees the member as the caller.
 
 An earlier version sent the week to a model on NEAR AI Cloud, and a claim took about 196 s. That version passed on 3 Nov on `pool-mw1317o0.rebates-demo-mw12j3o6.testnet`.
 
@@ -40,6 +42,7 @@ Wearable claims (`claim_wearable`):
 - a result signed by another key
 - a result signed for another member
 - a changed result
+- a lab result signature in place of a wearable result signature
 
 Lab claims (`claim_lab`):
 

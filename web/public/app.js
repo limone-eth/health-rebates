@@ -10,9 +10,9 @@ const HELD_POLL_MS = 1500;
 
 // A wearable claim needs no model: code applies the rule and the wearable service signs the result.
 const STEPS = [
-  ["account", "Test account opened"],
+  ["account", "Test account opened, with 0 NEAR"],
   ["wearable", "Good days counted and signed"],
-  ["chain", "Signature checked"],
+  ["chain", "Signature checked, gas paid by the insurer"],
 ];
 
 const ICONS = {
@@ -405,11 +405,11 @@ function proofHtml(m, who) {
 
 // Lab rebate, once a year. The model in the TEE reads the HbA1c values, and code on the server applies the rule.
 const LAB_STEPS = [
-  ["account", "Test account opened"],
+  ["account", "Test account opened, with 0 NEAR"],
   ["attestation", "Sealed model checked"],
   ["model", "Report read by the sealed model"],
   ["rule", "Lab rule applied in code"],
-  ["chain", "Both signatures checked"],
+  ["chain", "Both signatures checked, gas paid by the insurer"],
 ];
 const LAB_SAMPLES = [
   ["pass-mmol", "Under 5.7%, in mmol/mol"],

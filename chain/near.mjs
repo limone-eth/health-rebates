@@ -5,7 +5,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { RPC } from "./view.mjs";
 
 // web/live.mjs has no node_modules of its own, so it takes these from here.
-export { KeyPair, privateKeyToAccount };
+export { actions, KeyPair, privateKeyToAccount, teraToGas };
 
 export const HELPER = "https://helper.testnet.near.org/account";
 export const KEY_FILE = new URL("./.env.testnet", import.meta.url);
@@ -54,6 +54,12 @@ export async function waitForAccount(account) {
   }
 }
 
+function result(outcome) {
+  const failure =
+    outcome.status?.Failure ?? outcome.receipts_outcome?.find((r) => r.outcome.status?.Failure)?.outcome.status.Failure;
+  return { hash: outcome.transaction.hash, failure: failure ? JSON.stringify(failure) : null };
+}
+
 // Returns the transaction hash and the failure text, if any. A failed call does not throw.
 export async function call(account, contractId, method, args, deposit = 0n, tgas = 50) {
   const outcome = await account.signAndSendTransaction({
@@ -61,10 +67,26 @@ export async function call(account, contractId, method, args, deposit = 0n, tgas
     actions: [actions.functionCall(method, args, teraToGas(tgas), deposit)],
     throwOnFailure: false,
   });
-  const failure =
-    outcome.status?.Failure ?? outcome.receipts_outcome?.find((r) => r.outcome.status?.Failure)?.outcome.status.Failure;
-  return { hash: outcome.transaction.hash, failure: failure ? JSON.stringify(failure) : null };
+  return result(outcome);
 }
+
+// A meta transaction (NEP-366): the member signs the call, and the relayer sends it and pays the gas.
+// The contract still sees the member as the caller. So a member account can hold 0 NEAR (NEP-448).
+export async function relayCall(relayer, member, contractId, method, args, tgas = 50) {
+  const { signedDelegate } = await member.createSignedMetaTransaction({
+    receiverId: contractId,
+    actions: [actions.functionCall(method, args, teraToGas(tgas), 0n)],
+  });
+  const outcome = await relayer.signAndSendTransaction({
+    receiverId: member.accountId,
+    actions: [actions.signedDelegate(signedDelegate)],
+    throwOnFailure: false,
+  });
+  return result(outcome);
+}
+
+// The member's NEAR balance in yoctoNEAR.
+export const nearBalance = async (account) => BigInt((await account.getState()).balance.total);
 
 export async function mustCall(account, contractId, method, args, deposit = 0n, tgas = 50) {
   const result = await call(account, contractId, method, args, deposit, tgas);

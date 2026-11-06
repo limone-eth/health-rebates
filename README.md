@@ -46,7 +46,7 @@ cd tee && npm install && npm test && npm run check
 
 You see: all tests pass, then 5 runs of A, B and C, each with a verified signature. A is paid, B is not paid, and C is held for review. See [docs/tee-check.md](docs/tee-check.md). This check is from the first version, where a model read the week. Wearable claims now use plain code, and the attested model is for lab reports.
 
-Testnet run. It deploys tUSD and the rebate pool, then sends real wearable claims and two lab claims, and the pool pays in tUSD. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
+Testnet run. It deploys tUSD and the rebate pool, then sends real wearable claims and two lab claims as meta transactions, and the pool pays in tUSD. The members hold 0 NEAR. See [docs/testnet-run.md](docs/testnet-run.md) for the commands, the results and the limits.
 
 Web app. It has a member screen, an insurer screen and a Verified panel. Needs Node 20.6 or newer:
 
@@ -60,6 +60,7 @@ Open http://localhost:3000. With no keys, the app reads the last real results fr
 
 - NEAR AI Cloud: model inference in a TEE, attestation, response signatures. For lab reports.
 - NEAR testnet contract (`near-sdk`): `env::ecrecover`, `env::keccak256`, `env::sha256`, cross-contract calls with a callback.
+- Meta transactions (NEP-366) and zero-balance accounts (NEP-448): each member account holds 0 NEAR. The member signs the claim, and the insurer's account relays it and pays the gas.
 - NEP-141 token (`near-contract-standards`): tUSD, paid with `storage_deposit` and `ft_transfer`, and funded with `ft_transfer_call`.
 
 ## What you trust

@@ -2,7 +2,7 @@
 // Wearable claim: the wearable service decides in code. Lab claim: the attested model reads the report, and code decides.
 // Loaded only when keys exist, so the read-only app needs no npm install.
 import { randomBytes } from "node:crypto";
-import { accountWith, call, hasDevAccount, KeyPair, loadDevAccount, mustCall, NEAR, privateKeyToAccount, sleep, waitForAccount } from "../chain/near.mjs";
+import { accountWith, hasDevAccount, KeyPair, loadDevAccount, mustCall, nearBalance, privateKeyToAccount, relayCall, sleep, waitForAccount } from "../chain/near.mjs";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { decide, explainResult } from "../tee/claim.mjs";
 import { decideLab, explainLab, labClaimArgs, readLabReport } from "../tee/lab.mjs";
@@ -10,8 +10,6 @@ import { createNearAi } from "../tee/near-ai.mjs";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
 import { buildClaim, signRows } from "../wearable/server.mjs";
 
-// 0.07 NEAR. A claim with 50 Tgas needs about 0.051 NEAR up front, and the account also pays for its storage.
-const MEMBER_DEPOSIT = (NEAR * 7n) / 100n;
 const CLAIM_READ_ATTEMPTS = 15;
 const CLAIM_READ_DELAY_MS = 1000;
 // An attestation is good for this long in one process. Then the next lab claim attests again.
@@ -49,11 +47,18 @@ export async function createLive({ pool, model, apiKey = process.env.NEARAI_CLOU
     throw new Error("The claim transaction passed, but its record is not readable yet");
   }
 
+  // The member signed a meta transaction, and the insurer's account sent it.
+  async function gasText(member) {
+    const balance = await nearBalance(member);
+    return balance === 0n ? "The insurer paid the gas, and the member account holds 0 NEAR." : "The insurer paid the gas.";
+  }
+
   async function newMember(name, onStep) {
     // Two claims can start in the same millisecond on the host.
     const stamp = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
     const memberId = `${name.toLowerCase()}-${stamp}.${rootId}`;
-    await root.createSubAccount({ accountOrPrefix: memberId, publicKey: keyPair.getPublicKey(), nearToTransfer: MEMBER_DEPOSIT });
+    // No NEAR: a small account needs none for storage (NEP-448), and the insurer relays each claim and pays the gas.
+    await root.createSubAccount({ accountOrPrefix: memberId, publicKey: keyPair.getPublicKey(), nearToTransfer: 0n });
     const member = accountWith(memberId, keyPair);
     await waitForAccount(member);
     onStep("account", `New member account ${memberId}.`);
@@ -71,7 +76,7 @@ export async function createLive({ pool, model, apiKey = process.env.NEARAI_CLOU
       `${upload ? "This demo's key" : "The wearable service"} applied the rule in code and signed the result. Decision: ${decide(result)}.`,
     );
 
-    const { hash, failure } = await call(member, pool, "claim_wearable", {
+    const { hash, failure } = await relayCall(root, member, pool, "claim_wearable", {
       week: CLAIM_WEEK.start,
       request_hash: claim.request_hash,
       days_met: claim.days_met,
@@ -80,7 +85,7 @@ export async function createLive({ pool, model, apiKey = process.env.NEARAI_CLOU
     });
     if (failure) throw new Error(`claim failed: ${failure}`);
     await waitForClaim(memberId);
-    onStep("chain", `The contract checked the signature. ${EXPLORER}/${hash}`);
+    onStep("chain", `The contract checked the signature. ${await gasText(member)} ${EXPLORER}/${hash}`);
 
     return {
       account: memberId,
@@ -117,10 +122,10 @@ export async function createLive({ pool, model, apiKey = process.env.NEARAI_CLOU
     onStep("rule", `Code applied the lab rule to the values. Decision: ${decideLab(read.result)}.`);
 
     const args = await labClaimArgs({ contract: pool, member: memberId, year, read, signMessage: claims.signMessage });
-    const { hash, failure } = await call(member, pool, "claim_lab", args);
+    const { hash, failure } = await relayCall(root, member, pool, "claim_lab", args);
     if (failure) throw new Error(`lab claim failed: ${failure}`);
     await waitForClaim(memberId, `lab-${year}`);
-    onStep("chain", `The contract checked both signatures. ${EXPLORER}/${hash}`);
+    onStep("chain", `The contract checked both signatures. ${await gasText(member)} ${EXPLORER}/${hash}`);
 
     return {
       account: memberId,
