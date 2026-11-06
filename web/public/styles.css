@@ -388,3 +388,15 @@ details.tech dd { font: 400 13px/1.5 var(--mono); overflow-wrap: anywhere; }
     transition-duration: 1ms !important;
   }
 }
+
+/* Lab rebate */
+.lab-panel { display: grid; gap: 16px; max-width: 720px; margin-top: 40px; padding-top: 32px; border-top: 1px solid var(--stone); }
+.lab-head { display: grid; gap: 6px; }
+.lab-panel h2 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; line-height: 1.2; }
+.lab-samples { display: flex; flex-wrap: wrap; gap: 8px; }
+.lab-result { display: grid; gap: 12px; }
+.lab-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 12px 0; border-top: 1px solid var(--stone); }
+@media (max-width: 640px) {
+  .lab-panel h2 { font-size: 26px; }
+  .lab-samples .btn { flex: 1 1 100%; }
+}

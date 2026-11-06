@@ -196,7 +196,7 @@ function memberHtml(m, { arrive, landed }) {
           ${pickNames().map((name) => `<button type="button" data-member="${name}" class="${name === YOU ? "pick-you" : ""}" aria-pressed="${name === m.member}" aria-label="${name === YOU ? "Your data" : `Member ${name}`}" ${running ? "disabled" : ""}>${name}</button>`).join("")}
         </div>
       </div>
-      ${m.member === YOU && !running ? "" : `<button type="button" class="btn btn-primary" data-action="claim" ${live && !running ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>`}
+      ${m.member === YOU && !running ? "" : `<button type="button" class="btn btn-primary" data-action="claim" ${live && !running && !app.lab.run ? "" : "disabled"}>${running ? "Running the claim" : "Run a live claim"}</button>`}
       <p class="lab">${esc(running ? `About 15 seconds. ${app.run.name === YOU ? "Your data" : `Member ${app.run.name}`}.` : runNote(m.member, m.recorded_on))}</p>
       ${m.source === "whoop" && !running ? `<p class="rule">${esc(WHOOP_NOTE)}</p>` : ""}
       ${offNote()}
@@ -204,7 +204,8 @@ function memberHtml(m, { arrive, landed }) {
       ${uploadHtml()}
       <div id="steps" aria-live="polite">${stepsHtml()}</div>
     </section>
-  <div id="proof">${app.proof.member && m.outcome ? proofHtml(m, "your claim") : ""}</div>`;
+  <div id="proof">${app.proof.member && m.outcome ? proofHtml(m, "your claim") : ""}</div>
+  ${labHtml()}`;
 }
 
 // The preview shows an upload before its claim ends, so the picker needs the name from that point.
@@ -312,7 +313,8 @@ function insurerHtml(data, { arrive }) {
   <section class="stubs" aria-label="Claims for this week">
     ${data.members.map((m, index) => stubHtml(m, index, data, arrive)).join("")}
   </section>
-  <div id="proof">${opened ? proofHtml(opened, who(opened.member)) : ""}</div>`;
+  <div id="proof">${opened ? proofHtml(opened, who(opened.member)) : ""}</div>
+  ${labInsurerHtml()}`;
 }
 
 function stubHtml(m, index, data, arrive) {
@@ -397,6 +399,272 @@ function proofHtml(m, who) {
       </dl>
     </details>
   </section>`;
+}
+
+// Lab rebate, once a year. The model in the TEE reads the HbA1c values, and code on the server applies the rule.
+const LAB_STEPS = [
+  ["account", "Test account opened"],
+  ["attestation", "Sealed model checked"],
+  ["model", "Report read by the sealed model"],
+  ["rule", "Lab rule applied in code"],
+  ["chain", "Both signatures checked"],
+];
+const LAB_SAMPLES = [
+  ["pass-mmol", "Under 5.7%, in mmol/mol"],
+  ["pass-percent-better", "0.4 points better"],
+  ["fail-percent", "Only 0.1 points better"],
+  ["fail-mmol", "Over 5.7%, in mmol/mol"],
+  ["old-test", "Test older than a year"],
+  ["no-hba1c", "No HbA1c on the report"],
+];
+const LAB_RULE_TEXT = "An HbA1c test in the last 12 months, with HbA1c under 5.7% or 0.3 points better than the last test.";
+// pdf.js renders page 1 of a PDF in the browser. The server takes images only.
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/";
+const LAB_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const LAB_MAX_BYTES = 3 * 1024 * 1024;
+const LAB_MAX_SIDE = 2000;
+
+app.lab = { file: null, preparing: false, run: null, error: null, result: null };
+// Lab claims from this visit, for the insurer screen. The server does not keep them.
+app.labRows = [];
+
+const yesNo = (value) => (value ? "Yes" : "No");
+const canvasBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+
+// Draws the image at most LAB_MAX_SIDE pixels on its long side. A PNG stays sharp for text; a large one becomes a JPEG.
+async function drawImage(source, width, height) {
+  const scale = Math.min(1, LAB_MAX_SIDE / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const png = await canvasBlob(canvas, "image/png");
+  if (png && png.size <= LAB_MAX_BYTES) return { blob: png, type: "image/png" };
+  return { blob: await canvasBlob(canvas, "image/jpeg", 0.9), type: "image/jpeg" };
+}
+
+async function pdfPage(file) {
+  const pdfjs = await import(`${PDFJS}pdf.min.mjs`);
+  pdfjs.GlobalWorkerOptions.workerSrc = `${PDFJS}pdf.worker.min.mjs`;
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  try {
+    const page = await pdf.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(3, LAB_MAX_SIDE / Math.max(base.width, base.height)) });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    return drawImage(canvas, canvas.width, canvas.height);
+  } finally {
+    pdf.destroy();
+  }
+}
+
+async function labImage(file) {
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return pdfPage(file);
+  if (!file.type.startsWith("image/")) throw new Error("Choose a PDF or a photo of the report.");
+  const bitmap = await createImageBitmap(file);
+  try {
+    const small = Math.max(bitmap.width, bitmap.height) <= LAB_MAX_SIDE;
+    if (small && LAB_TYPES.includes(file.type) && file.size <= LAB_MAX_BYTES) return { blob: file, type: file.type };
+    return await drawImage(bitmap, bitmap.width, bitmap.height);
+  } finally {
+    bitmap.close();
+  }
+}
+
+function labStepsHtml() {
+  const run = app.lab.run;
+  if (!run) return "";
+  const done = new Set(run.done);
+  const nextId = LAB_STEPS.find(([id]) => !done.has(id))?.[0];
+  return `<ol class="steps ${run.done.length ? "" : "enter"}">${LAB_STEPS.map(([id, text], index) => {
+    const state = done.has(id) ? "done" : id === nextId ? "now" : "";
+    return `<li data-step="${id}" class="${state}" style="--i:${index}"><span class="mark"><span class="dot"></span>${icon("check")}</span><span>${esc(text)}<span class="sr-only">${state === "done" ? " Done." : ""}</span></span></li>`;
+  }).join("")}</ol>`;
+}
+
+function updateLabSteps() {
+  const holder = document.getElementById("lab-steps");
+  if (holder) holder.innerHTML = labStepsHtml().replace(' class="steps enter"', ' class="steps"');
+}
+
+const testText = (test) => (test ? `${test.value} ${test.unit}, ${longDate(test.date)}` : "None");
+
+function labResultHtml(lab) {
+  const { member } = lab;
+  const paid = member.result.rule_met;
+  const values = member.answer?.values ?? {};
+  return `<div class="lab-result">
+    ${fieldsHtml([
+      ["Recent test", yesNo(member.result.test_found)],
+      ["Rule met", yesNo(paid)],
+      ["Rebate", paid ? (app.insurer?.rebate ?? "Paid") : "None"],
+    ])}
+    <p class="explain">${esc(member.explanation)}</p>
+    <details class="why">
+      <summary>What the model read</summary>
+      <p class="rule">Latest HbA1c: ${esc(testText(values.latest))}. Earlier HbA1c: ${esc(testText(values.earlier))}.</p>
+      <p class="rule">Only you see these values. The test network has the hashes and the result.</p>
+    </details>
+    <div class="upload-open">
+      <a class="link" href="${esc(`${app.status.explorer}/${encodeURIComponent(member.tx)}`)}" target="_blank" rel="noopener noreferrer">See the public record</a>
+      <button type="button" class="link" data-action="lab-download">Download the signed answer</button>
+    </div>
+    <details class="tech">
+      <summary>Technical details</summary>
+      <dl>
+        <dt class="lab">Member account</dt><dd>${esc(member.account)}</dd>
+        <dt class="lab">Request hash</dt><dd>${esc(member.request_hash)}</dd>
+        <dt class="lab">Answer hash</dt><dd>${esc(member.response_hash)}</dd>
+        ${member.answer?.signing_address ? `<dt class="lab">Model signer</dt><dd>${esc(member.answer.signing_address)}</dd>` : ""}
+        ${member.answer?.model ? `<dt class="lab">Model</dt><dd>${esc(member.answer.model)}</dd>` : ""}
+      </dl>
+    </details>
+  </div>`;
+}
+
+function labChooserHtml(live) {
+  const busy = Boolean(app.run || app.lab.run || app.lab.preparing);
+  if (app.lab.file) {
+    return `<div class="upload-panel" role="group" aria-label="Run a lab claim with this report">
+      <p class="lab">${esc(app.lab.file.name)}</p>
+      <ul class="rule">
+        <li>The report goes to a model in a sealed machine on NEAR AI Cloud. The model reads the HbA1c values only.</li>
+        <li>Code on this server applies the rule to those values. This server keeps no report and no value.</li>
+        <li>The test network gets hashes and the result, under a made-up name. No value and no date.</li>
+        <li>Use a sample, or a report that you are happy to send to NEAR AI Cloud.</li>
+      </ul>
+      <div class="held-actions">
+        <button type="button" class="btn btn-primary btn-small" data-action="lab-run" ${busy ? "disabled" : ""}>Run the lab claim</button>
+        <button type="button" class="btn btn-secondary btn-small" data-action="lab-cancel">Cancel</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="lab-samples" role="group" aria-label="Sample lab reports">
+      ${LAB_SAMPLES.map(([id, label]) => `<button type="button" class="btn btn-secondary btn-small" data-action="lab-sample" data-sample="${id}" data-label="${esc(label)}" ${live && !busy ? "" : "disabled"}>${esc(label)}</button>`).join("")}
+    </div>
+    <div class="upload-open">
+      ${live ? `<button type="button" class="link" data-action="lab-pick" ${busy ? "disabled" : ""}>${app.lab.preparing ? "Preparing the report" : "Use your own report"}</button>` : ""}
+      <a class="link" href="/lab-samples/pass-percent-better.pdf" target="_blank" rel="noopener noreferrer">See a sample report</a>
+      <input type="file" id="lab-file" accept="application/pdf,image/png,image/jpeg,image/webp,image/heic" hidden>
+    </div>`;
+}
+
+function labHtml() {
+  const live = app.status.mode === "live";
+  const { run, error, result } = app.lab;
+  return `<section class="lab-panel" aria-labelledby="lab-title">
+    <div class="lab-head">
+      <p class="lab">Once a year</p>
+      <h2 id="lab-title">Lab rebate</h2>
+      <p class="rule">${esc(LAB_RULE_TEXT)}</p>
+    </div>
+    ${result && !run ? labResultHtml(result) : ""}
+    ${run ? `<p class="lab">About 20 seconds. ${esc(run.name)}.</p>` : labChooserHtml(live)}
+    ${error ? `<p class="alert" role="alert">The lab claim stopped. ${esc(error)}</p>` : ""}
+    <div id="lab-steps" aria-live="polite">${labStepsHtml()}</div>
+  </section>`;
+}
+
+function labInsurerHtml() {
+  if (!app.labRows.length) return "";
+  return `<section class="lab-panel" aria-labelledby="lab-insurer-title">
+    <div class="lab-head">
+      <p class="lab">From this visit</p>
+      <h2 id="lab-insurer-title">Lab claims</h2>
+      <p class="rule">You see the result and the proof. You do not see the report, its values or its dates.</p>
+    </div>
+    ${app.labRows.map((row) => `<article class="lab-row">
+      ${fieldsHtml([
+        ["Recent test", yesNo(row.result.test_found)],
+        ["Rule met", yesNo(row.result.rule_met)],
+        ["Result", row.outcome === "Paid" ? `Paid ${app.insurer?.rebate ?? ""}`.trim() : "Not paid"],
+      ])}
+      <a class="link" href="${esc(`${app.status.explorer}/${encodeURIComponent(row.tx)}`)}" target="_blank" rel="noopener noreferrer" aria-label="See the public record of this lab claim, in a new tab">See record</a>
+    </article>`).join("")}
+  </section>`;
+}
+
+async function runLab() {
+  const file = app.lab.file;
+  app.lab = { ...app.lab, file: null, run: { name: file.name, done: [] }, error: null };
+  render();
+  announce("Lab claim started.");
+  const pause = (ms) => (reducedMotion.matches ? null : new Promise((resolve) => setTimeout(resolve, ms)));
+  try {
+    const res = await fetch("/api/labs", { method: "POST", headers: { "Content-Type": file.type }, body: file.blob });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    const run = app.lab.run;
+    let shown = Promise.resolve();
+    let result = null;
+    await readEvents(res, (event) => {
+      if (event.type === "step") {
+        shown = shown.then(() => {
+          run.done.push(event.step);
+          updateLabSteps();
+          return pause(STEP_GAP_MS);
+        });
+      }
+      if (event.type === "error") throw new Error(event.message);
+      if (event.type === "done") result = event.lab;
+    });
+    await shown;
+    await pause(STEP_SETTLE_MS);
+    if (!result) throw new Error("The claim ended with no result.");
+    app.labRows.push(result.insurer_row);
+    app.lab = { ...app.lab, run: null, result };
+    // The totals on the insurer screen count the new claim.
+    await loadAll().catch(() => {});
+    render();
+    announce(`Lab claim finished. Rebate: ${result.member.result.rule_met ? "paid" : "not paid"}.`);
+  } catch (error) {
+    app.lab = { ...app.lab, run: null, error: error.message };
+    render();
+  }
+  main.querySelector(".lab-panel h2")?.scrollIntoView({ block: "start", behavior: reducedMotion.matches ? "auto" : "smooth" });
+}
+
+async function chooseLabFile(file) {
+  app.lab = { ...app.lab, preparing: true, error: null };
+  render();
+  try {
+    const image = await labImage(file);
+    app.lab = { ...app.lab, preparing: false, file: { name: file.name, ...image } };
+  } catch (error) {
+    app.lab = { ...app.lab, preparing: false, error: error.message?.startsWith("Choose") ? error.message : "Could not read this file. Try a PDF, PNG or JPEG." };
+  }
+  render();
+  main.querySelector('[data-action="lab-run"]')?.focus({ preventScroll: true });
+}
+
+async function chooseLabSample(id, label) {
+  try {
+    const res = await fetch(`/lab-samples/${id}.png`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    app.lab = { ...app.lab, error: null, file: { name: `Sample report: ${label}`, blob: await res.blob(), type: "image/png" } };
+  } catch (error) {
+    app.lab = { ...app.lab, error: `Could not load the sample. ${error.message}` };
+  }
+  render();
+  main.querySelector('[data-action="lab-run"]')?.focus({ preventScroll: true });
+}
+
+// The member keeps the model's signed answer. An auditor can check it against the hashes on the test network.
+function downloadLabAnswer() {
+  const { member } = app.lab.result;
+  const proof = { pool: app.status.pool, member: member.account, year: member.year, request_hash: member.request_hash, response_hash: member.response_hash, result: member.result, tx: member.tx, ...member.answer };
+  const url = URL.createObjectURL(new Blob([`${JSON.stringify(proof, null, 2)}\n`], { type: "application/json" }));
+  const link = Object.assign(document.createElement("a"), { href: url, download: `lab-answer-${member.year}.json` });
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function setLens(seg, animate) {
@@ -645,6 +913,17 @@ main.addEventListener("click", (event) => {
     replaceProof(chosen ? proofHtml(chosen, who(chosen.member)) : "");
   } else if (action === "approve" || action === "reject") {
     resolveHeld(member, action === "approve");
+  } else if (action === "lab-sample") {
+    chooseLabSample(target.dataset.sample, target.dataset.label);
+  } else if (action === "lab-pick") {
+    document.getElementById("lab-file").click();
+  } else if (action === "lab-cancel") {
+    app.lab = { ...app.lab, file: null };
+    render();
+  } else if (action === "lab-run") {
+    runLab();
+  } else if (action === "lab-download") {
+    downloadLabAnswer();
   } else if (action === "reload") {
     start();
   }
@@ -654,6 +933,7 @@ addEventListener("hashchange", () => go(readRoute));
 
 // The hash holds the route, so the skip link moves the focus and leaves the hash alone.
 main.addEventListener("change", async (event) => {
+  if (event.target.id === "lab-file" && event.target.files[0]) return chooseLabFile(event.target.files[0]);
   if (event.target.id !== "upload-file" || !event.target.files[0]) return;
   const file = event.target.files[0];
   app.runError = null;
