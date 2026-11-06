@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "check": "node --env-file=../.env check.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "lab-check": "node --env-file=../.env lab-check.mjs"
   },
   "dependencies": {
     "@phala/dcap-qvl-node": "0.3.3",
