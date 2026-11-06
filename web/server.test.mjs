@@ -133,6 +133,8 @@ describe("the hosted copy with keys", () => {
   let totals;
   let runs;
   let saves;
+  let labImages = [];
+  const labProof = { account: "lab-new.dev.testnet", tx: "labtx", year: 2026, result: { test_found: true, rule_met: true }, request_hash: "aa", response_hash: "bb" };
   const origin = () => ({ Origin: url.replace("http:", "https:") });
 
   before(async () => {
@@ -141,6 +143,12 @@ describe("the hosted copy with keys", () => {
         runs += 1;
         onStep("attestation", "ok");
         return stored;
+      },
+      runLab: async (image, onStep) => {
+        runs += 1;
+        labImages.push(image);
+        onStep("model", "ok");
+        return { ...labProof, explanation: "A lab sentence.", answer: { values: { latest: { value: 5.4, unit: "%", date: "2026-10-12" }, earlier: null } } };
       },
     };
     hosted = await createApp({
@@ -232,6 +240,34 @@ describe("the hosted copy with keys", () => {
     assert.equal((await fetch(`${url}/api/uploads`, { method: "POST", body: csv })).status, 403);
     totals = { paid: 4, not_paid: 3, held: 2, rejected: 1 };
     assert.equal((await fetch(`${url}/api/uploads`, { method: "POST", headers: origin(), body: csv })).status, 403);
+    assert.equal(runs, 0);
+  });
+
+  test("a lab report runs a lab claim; only the member's view holds the values", async () => {
+    const shared = JSON.stringify(state);
+    labImages = [];
+    const png = Buffer.from("fake png bytes");
+    const res = await fetch(`${url}/api/labs`, { method: "POST", headers: { ...origin(), "Content-Type": "image/png" }, body: png });
+    const events = (await res.text()).trim().split("\n").map((line) => JSON.parse(line));
+    const done = events.at(-1);
+    assert.equal(events[0].type, "step");
+    assert.equal(done.type, "done");
+    assert.deepEqual(labImages, [{ type: "image/png", bytes: png }]);
+    assert.equal(done.lab.member.answer.values.latest.value, 5.4);
+    assert.deepEqual(done.lab.insurer_row, { ...labProof, outcome: "Paid" });
+    assert.equal(JSON.stringify(done.lab.insurer_row).includes("5.4"), false);
+    assert.equal(saves, 0);
+    assert.equal(JSON.stringify(state), shared);
+  });
+
+  test("a lab claim needs an image of a good size, from this site, under the cap", async () => {
+    const post = (headers, body = Buffer.from("x")) => fetch(`${url}/api/labs`, { method: "POST", headers, body });
+    assert.equal((await post({ ...origin(), "Content-Type": "application/pdf" })).status, 422);
+    assert.equal((await post({ ...origin(), "Content-Type": "image/png" }, Buffer.alloc(0))).status, 422);
+    assert.equal((await post({ ...origin(), "Content-Type": "image/jpeg" }, Buffer.alloc(3 * 1024 * 1024 + 1))).status, 422);
+    assert.equal((await post({ "Content-Type": "image/png" })).status, 403);
+    totals = { paid: 4, not_paid: 3, held: 2, rejected: 1 };
+    assert.equal((await post({ ...origin(), "Content-Type": "image/png" })).status, 403);
     assert.equal(runs, 0);
   });
 

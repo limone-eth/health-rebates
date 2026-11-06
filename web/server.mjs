@@ -5,6 +5,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { summarizeBaseline } from "../tee/claim.mjs";
+import { LAB_IMAGE_TYPES, LabError, MAX_LAB_BYTES } from "../tee/lab.mjs";
 import { loadMembers } from "../tee/members.mjs";
 import { authorizeUrl, newState, readTrackerDays, TrackerError, TRACKERS } from "./trackers.mjs";
 import { MAX_UPLOAD_BYTES, parseUpload, uploadFromTracker, UploadError } from "./upload.mjs";
@@ -12,7 +13,15 @@ import { insurerView, memberView } from "./views.mjs";
 
 const STATE_FILE = new URL("./state.json", import.meta.url);
 const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".csv": "text/csv" };
+const TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".csv": "text/csv",
+  ".png": "image/png",
+  ".pdf": "application/pdf",
+};
 const MEMBER_NAMES = ["A", "B", "C"];
 const MAX_BODY = 256;
 // A device maker sets the length of its code, so this limit is larger.
@@ -178,6 +187,53 @@ export async function createApp({
     }
   }
 
+  // The image arrives as raw bytes. Stops reading at the limit, so a large body does not fill memory.
+  const readImage = async (req) => {
+    const type = String(req.headers["content-type"] ?? "").split(";")[0].trim();
+    if (!LAB_IMAGE_TYPES.includes(type)) throw new LabError("Send a PNG, JPEG or WebP image of the report.");
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > MAX_LAB_BYTES) throw new LabError("The file is too large.");
+      chunks.push(chunk);
+    }
+    return { type, bytes: Buffer.concat(chunks) };
+  };
+
+  // A lab claim. The report, its values and the signed answer go back to this page only. The server stores none of them.
+  async function runLabClaim(req, res) {
+    if (running) return send(res, 409, { detail: "A claim is running. Try again in a minute." });
+    running = true;
+    try {
+      let image;
+      try {
+        if (await capReached(getState())) return send(res, 403, { detail: capReason });
+        image = await readImage(req);
+        if (!image.bytes.length) throw new LabError("The file is empty.");
+      } catch (error) {
+        if (error instanceof LabError) return send(res, 422, { detail: error.message });
+        console.error("lab claim could not start:", error.name);
+        return send(res, 502, { detail: "Could not read your file. Try again." });
+      }
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (event) => res.write(`${JSON.stringify(event)}\n`);
+      try {
+        const lab = await live.runLab(image, (step, text) => write({ type: "step", step, text }));
+        const { answer, explanation, ...proof } = lab;
+        // The insurer row has the result and the proof. Only the member's view has the signed answer with the values.
+        write({ type: "done", lab: { member: { ...proof, explanation, answer }, insurer_row: { ...proof, outcome: lab.result.rule_met ? "Paid" : "NotPaid" } } });
+      } catch (error) {
+        // The log must not hold report data. So this logs only the type of error.
+        console.error("lab claim failed:", error.name);
+        write({ type: "error", message: "The lab claim did not finish. Try again." });
+      }
+      res.end();
+    } finally {
+      running = false;
+    }
+  }
+
   const STATE_COOKIE = "tracker_state";
   const stateCookie = (value, maxAge) => `${STATE_COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/api/trackers; Max-Age=${maxAge}${hosted ? "; Secure" : ""}`;
   const cookieState = (req) => (req.headers.cookie ?? "").split(/;\s*/).find((part) => part.startsWith(`${STATE_COOKIE}=`))?.slice(STATE_COOKIE.length + 1);
@@ -253,6 +309,10 @@ export async function createApp({
         if (pathname === "/api/uploads") {
           if (!live) return send(res, 403, { detail: liveReason });
           return await runVisitorClaim(res, "file", async () => parseUpload(await readText(req)));
+        }
+        if (pathname === "/api/labs") {
+          if (!live) return send(res, 403, { detail: liveReason });
+          return await runLabClaim(req, res);
         }
         const trackerClaim = pathname.match(/^\/api\/trackers\/([a-z]+)\/claims$/);
         if (trackerClaim) {

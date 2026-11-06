@@ -1,22 +1,22 @@
 {
-  "pool": "pool-mw4vw9nx.rebates-demo-mw12j3o6.testnet",
+  "pool": "pool-mw4x0ixq.rebates-demo-mw12j3o6.testnet",
   "week": "2026-10-26",
   "members": {
     "A": {
-      "account": "a-mw4vyqif-8aec.rebates-demo-mw12j3o6.testnet",
-      "tx": "7v9iUspvp5dsgSoZq2tspaj9MPRXoUSyjc3md2SKV36d",
+      "account": "a-mw4x0ixq.rebates-demo-mw12j3o6.testnet",
+      "tx": "HWV73yj5qQP3HEoejxctWN8j93mmQYJB6jsJKqjM9P36",
       "recorded_on": "2026-11-06",
       "explanation": "You met the goals on 6 of 7 days. That is enough for the rebate, and the week matches your usual pattern. Your insurer sees this result, not your steps or sleep."
     },
     "B": {
-      "account": "b-mw4vw9nx.rebates-demo-mw12j3o6.testnet",
-      "tx": "7jPqgkFWmf8wutDXVxFaJnSVn1vs9jc8JDM2sBzKudpJ",
+      "account": "b-mw4x0ixq.rebates-demo-mw12j3o6.testnet",
+      "tx": "Gbaoqt858MSZv2Yz1nrF8ztnehxyiQw1SqLqVi2U7pbW",
       "recorded_on": "2026-11-06",
       "explanation": "You met the goals on 3 of 7 days. The rebate needs 5, so this week is not paid. Your insurer sees this result, not your steps or sleep."
     },
     "C": {
-      "account": "c-mw4vw9nx.rebates-demo-mw12j3o6.testnet",
-      "tx": "58rWnxokBK8aoHUszPgZ1Z4rkhPoMRat8vXsnZbR8YSi",
+      "account": "c-mw4x0ixq.rebates-demo-mw12j3o6.testnet",
+      "tx": "3MyPsGciCeR8vtzBqkomWTT3Va7wnaGQqLgtU6qNFeBq",
       "recorded_on": "2026-11-06",
       "explanation": "You met the goals on 6 of 7 days. This week looks different from your usual pattern, so a person will review it before payment. Your insurer sees this result, not your steps or sleep."
     }

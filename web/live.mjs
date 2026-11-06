@@ -1,10 +1,12 @@
-// A real wearable claim: new member account, a result that the wearable service decides and signs, on-chain claim.
-// No model decides a wearable claim. The attested model is for lab reports.
+// Real claims on testnet: a new member account each time, then a signed result, then the on-chain claim.
+// Wearable claim: the wearable service decides in code. Lab claim: the attested model reads the report, and code decides.
 // Loaded only when keys exist, so the read-only app needs no npm install.
 import { randomBytes } from "node:crypto";
 import { accountWith, call, hasDevAccount, KeyPair, loadDevAccount, mustCall, NEAR, privateKeyToAccount, sleep, waitForAccount } from "../chain/near.mjs";
 import { EXPLORER, view } from "../chain/view.mjs";
 import { decide, explainResult } from "../tee/claim.mjs";
+import { decideLab, explainLab, labClaimArgs, readLabReport } from "../tee/lab.mjs";
+import { createNearAi } from "../tee/near-ai.mjs";
 import { CLAIM_WEEK, MEMBERS } from "../wearable/data.mjs";
 import { buildClaim, signRows } from "../wearable/server.mjs";
 
@@ -12,9 +14,11 @@ import { buildClaim, signRows } from "../wearable/server.mjs";
 const MEMBER_DEPOSIT = (NEAR * 7n) / 100n;
 const CLAIM_READ_ATTEMPTS = 15;
 const CLAIM_READ_DELAY_MS = 1000;
+// An attestation is good for this long in one process. Then the next lab claim attests again.
+const ATTESTATION_MS = 10 * 60 * 1000;
 const idOf = Object.fromEntries(Object.entries(MEMBERS).map(([id, member]) => [member.name, id]));
 
-export async function createLive({ pool, model }) {
+export async function createLive({ pool, model, apiKey = process.env.NEARAI_CLOUD_API_KEY }) {
   if (!hasDevAccount()) throw new Error("No dev account: chain/.env.testnet does not exist");
 
   const { accountId: rootId, nearKey, wearableKey } = loadDevAccount();
@@ -37,24 +41,28 @@ export async function createLive({ pool, model }) {
   }
 
   // Views read final state, which comes some seconds after the transaction. Without this wait, the screens show "No claim".
-  async function waitForClaim(memberId) {
+  async function waitForClaim(memberId, week = CLAIM_WEEK.start) {
     for (let attempt = 0; attempt < CLAIM_READ_ATTEMPTS; attempt++) {
-      if (await view(pool, "get_claim", { member: memberId, week: CLAIM_WEEK.start })) return;
+      if (await view(pool, "get_claim", { member: memberId, week })) return;
       await sleep(CLAIM_READ_DELAY_MS);
     }
     throw new Error("The claim transaction passed, but its record is not readable yet");
   }
 
-  // Calls onStep for each finished step. Returns what the state file keeps. Throws if any check fails.
-  async function runClaim(name, onStep, upload = null) {
+  async function newMember(name, onStep) {
     // Two claims can start in the same millisecond on the host.
     const stamp = `${Date.now().toString(36)}-${randomBytes(2).toString("hex")}`;
     const memberId = `${name.toLowerCase()}-${stamp}.${rootId}`;
-
     await root.createSubAccount({ accountOrPrefix: memberId, publicKey: keyPair.getPublicKey(), nearToTransfer: MEMBER_DEPOSIT });
     const member = accountWith(memberId, keyPair);
     await waitForAccount(member);
     onStep("account", `New member account ${memberId}.`);
+    return { memberId, member };
+  }
+
+  // Calls onStep for each finished step. Returns what the state file keeps. Throws if any check fails.
+  async function runClaim(name, onStep, upload = null) {
+    const { memberId, member } = await newMember(name, onStep);
 
     const claim = await requestClaim(name, memberId, upload);
     const result = { days_met: claim.days_met, pattern_matches_owner: claim.pattern_matches_owner };
@@ -82,7 +90,51 @@ export async function createLive({ pool, model }) {
     };
   }
 
+  const ai = apiKey ? createNearAi({ apiKey, model }) : null;
+  let attested = null;
+
+  // The insurer checks the attestation off-chain, then registers each signer that the pool does not have yet.
+  async function attestedSigners() {
+    if (attested && Date.now() - attested.at < ATTESTATION_MS) return attested.signers;
+    const signers = await ai.attest();
+    for (const signer of signers) {
+      if (!(await view(pool, "is_registered_signer", { signer }))) await mustCall(root, pool, "register_signer", { signer });
+    }
+    attested = { signers, at: Date.now() };
+    return signers;
+  }
+
+  // A lab claim for the visitor's report. The report and its values stay in memory for this call only.
+  // Returns the result and the proof, and the signed answer for the member to keep.
+  async function runLab(image, onStep, today = new Date().toISOString().slice(0, 10)) {
+    if (!ai) throw new Error("No NEAR AI key");
+    const year = Number(today.slice(0, 4));
+    const [signers, { memberId, member }] = await Promise.all([attestedSigners(), newMember("lab", onStep)]);
+    onStep("attestation", `The NEAR AI attestation passed: ${signers.length === 1 ? "1 model signer" : `${signers.length} model signers`}, registered on the pool.`);
+
+    const read = await readLabReport({ ai, signers, model, image, today });
+    onStep("model", "The model in the TEE read the HbA1c values, and the NEAR AI signature on its answer is good.");
+    onStep("rule", `Code applied the lab rule to the values. Decision: ${decideLab(read.result)}.`);
+
+    const args = await labClaimArgs({ contract: pool, member: memberId, year, read, signMessage: claims.signMessage });
+    const { hash, failure } = await call(member, pool, "claim_lab", args);
+    if (failure) throw new Error(`lab claim failed: ${failure}`);
+    await waitForClaim(memberId, `lab-${year}`);
+    onStep("chain", `The contract checked both signatures. ${EXPLORER}/${hash}`);
+
+    return {
+      account: memberId,
+      tx: hash,
+      year,
+      result: read.result,
+      request_hash: read.requestHash,
+      response_hash: read.responseHash,
+      explanation: explainLab(read.result),
+      answer: read.answer,
+    };
+  }
+
   const resolveHeld = (memberId, week, approve) => mustCall(root, pool, "resolve_held", { member: memberId, week, approve });
 
-  return { runClaim, resolveHeld };
+  return { runClaim, runLab, resolveHeld };
 }

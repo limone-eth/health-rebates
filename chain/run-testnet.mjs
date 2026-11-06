@@ -1,5 +1,6 @@
-// Runs the rebate pool on NEAR testnet with real wearable claims, paid in tUSD. Free testnet tokens and synthetic data only.
-// The wearable service decides each claim in plain code and signs the result. No model call decides a wearable claim.
+// Runs the rebate pool on NEAR testnet with real wearable and lab claims, paid in tUSD. Free testnet tokens and synthetic data only.
+// The wearable service decides each wearable claim in plain code and signs the result. No model call decides a wearable claim.
+// For a lab claim, the attested NEAR AI model reads the HbA1c values of a synthetic report, and plain code applies the lab rule.
 //
 // The first run creates a dev account and saves its key in chain/.env.testnet, which git ignores.
 // Each run deploys a new tUSD token, a new pool and new member accounts, because a member can claim a week one time.
@@ -13,6 +14,9 @@ import { EXPLORER, view } from "./view.mjs";
 import { CLAIM_WEEK } from "../wearable/data.mjs";
 import { RULE } from "../wearable/rule.mjs";
 import { decide, explainResult } from "../tee/claim.mjs";
+import { labClaimArgs, labResultText, readLabReport } from "../tee/lab.mjs";
+import { LAB_SAMPLES } from "../tee/lab-samples.mjs";
+import { createNearAi } from "../tee/near-ai.mjs";
 import { EXPECTED, loadMembers } from "../tee/members.mjs";
 import { signRows } from "../wearable/server.mjs";
 
@@ -27,6 +31,11 @@ const SUPPLY = 1_000_000n * TUSD;
 const POOL_FUNDS = 1_000n * TUSD;
 const TOKEN_STORAGE = NEAR / 800n; // 0.00125 NEAR, the NEP-145 registration
 const RULE_TEXT = `${RULE.minSteps}+ steps with ${RULE.minRaisedHeartRateMinutes}+ raised heart rate minutes, and ${RULE.minSleepMinutes}+ sleep minutes, on ${RULE.minDays} of ${RULE.days} days`;
+
+// The synthetic reports have fixed dates, so the lab claims use the date that the samples were written for.
+const LAB_TODAY = "2026-11-06";
+const LAB_YEAR = 2026;
+if (!process.env.NEARAI_CLOUD_API_KEY) throw new Error("Set NEARAI_CLOUD_API_KEY in .env: the lab claims use the NEAR AI model");
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -109,27 +118,24 @@ const testAi = privateKeyToAccount(generatePrivateKey());
 const otherKey = privateKeyToAccount(generatePrivateKey());
 await mustCall(root, poolId, "register_signer", { signer: testAi.address });
 
-const fakeHash = sha256("synthetic test request");
-const responseBody = (message, model = MODEL) =>
-  JSON.stringify({ model, choices: [{ message: { role: "assistant", ...message } }] });
-const goodBody = responseBody({ content: JSON.stringify({ days_met: 7, pattern_matches_owner: true }) });
-const wearableSign = (signer, memberId, week, hash) =>
-  signer.signMessage({ message: `rebate-claim:${poolId}:${memberId}:${week}:${hash}` });
-const aiSign = (signer, body, hash = fakeHash, model = MODEL) =>
-  signer.signMessage({ message: `${model}:${hash}:${sha256(body)}` });
-
-async function expectRejected(name, account, args, expected, method = "claim") {
+async function expectRejected(name, account, args, expected, method) {
   const { failure, hash } = await call(account, poolId, method, args);
   check(`testnet rejects: ${name}`, Boolean(failure?.includes(expected)), failure ? `tx ${hash}` : "the call passed");
 }
 
-const claimer = members.B;
-const claimArgs = async ({ body = goodBody, hash = fakeHash, ai = testAi, aiModel = MODEL, wearableBy = wearable, wearableFor = claimer.accountId }) => ({
-  week: OTHER_WEEK,
-  request_hash: hash,
-  response_body: body,
-  ai_signature: await aiSign(ai, body, hash, aiModel),
-  wearable_signature: await wearableSign(wearableBy, wearableFor, OTHER_WEEK, hash),
+// A lab claim by B with fake hashes. The test AI key stands in for a registered NEAR AI signer.
+const labRequest = fakeHashFor("lab request");
+const labAnswer = fakeHashFor("lab answer");
+const labArgs = async ({ requestHash = labRequest, responseHash = labAnswer, testFound = true, ruleMet = true, ai = testAi, aiModel = MODEL, aiAnswer = responseHash, by = wearable, forId = members.B.accountId, signedRuleMet = ruleMet } = {}) => ({
+  year: LAB_YEAR,
+  request_hash: requestHash,
+  response_hash: responseHash,
+  test_found: testFound,
+  rule_met: ruleMet,
+  ai_signature: await ai.signMessage({ message: `${aiModel}:${requestHash}:${aiAnswer}` }),
+  service_signature: await by.signMessage({
+    message: labResultText({ contract: poolId, member: forId, year: LAB_YEAR, requestHash, responseHash, testFound, ruleMet: signedRuleMet }),
+  }),
 });
 
 const resultArgs = async ({ days = 6, signedDays = days, by = wearable, forId = members.B.accountId, signature } = {}) => ({
@@ -143,28 +149,23 @@ await expectRejected("a result signed by another key", members.B, await resultAr
 await expectRejected("a result signed for another member", members.B, await resultArgs({ forId: members.A.accountId }), "did not sign this result", "claim_wearable");
 await expectRejected("a changed result", members.B, await resultArgs({ days: 7, signedDays: 3 }), "did not sign this result", "claim_wearable");
 await expectRejected(
-  "a request signature in place of a result signature",
+  "a lab result signature in place of a wearable result signature",
   members.B,
-  await resultArgs({ signature: await wearableSign(wearable, members.B.accountId, OTHER_WEEK, fakeHashFor("result")) }),
+  await resultArgs({ signature: (await labArgs({ requestHash: fakeHashFor("result") })).service_signature }),
   "did not sign this result",
   "claim_wearable",
 );
 
-// The NEAR AI path, which lab claims will use.
-await expectRejected("a wearable signature from another key", claimer, await claimArgs({ wearableBy: otherKey }), "wearable service did not sign");
-await expectRejected("a wearable signature for another member", claimer, await claimArgs({ wearableFor: members.A.accountId }), "wearable service did not sign");
-await expectRejected("a NEAR AI signer that is not registered", claimer, await claimArgs({ ai: otherKey }), "signer is not registered");
-await expectRejected("a signature for a model that is not published", claimer, await claimArgs({ aiModel: "other/model" }), "signer is not registered");
-await expectRejected("a response body from another model", claimer, await claimArgs({ body: responseBody({ content: "{}" }, "other/model") }), "another model");
-await expectRejected("a request hash that is not 64 hex characters", claimer, await claimArgs({ hash: "abc" }), "64 lowercase hex");
-await expectRejected(
-  "a body with reasoning text",
-  claimer,
-  await claimArgs({ body: responseBody({ content: JSON.parse(goodBody).choices[0].message.content, reasoning_content: "synthetic" }) }),
-  "reasoning text",
-);
+await expectRejected("a lab result signed by another key", members.B, await labArgs({ by: otherKey }), "did not sign this lab result", "claim_lab");
+await expectRejected("a lab result signed for another member", members.B, await labArgs({ forId: members.A.accountId }), "did not sign this lab result", "claim_lab");
+await expectRejected("a lab result changed to paid", members.B, await labArgs({ signedRuleMet: false }), "did not sign this lab result", "claim_lab");
+await expectRejected("a NEAR AI signer that is not registered", members.B, await labArgs({ ai: otherKey }), "signer is not registered", "claim_lab");
+await expectRejected("a NEAR AI signature for another answer", members.B, await labArgs({ aiAnswer: fakeHashFor("other answer") }), "signer is not registered", "claim_lab");
+await expectRejected("a signature for a model that is not published", members.B, await labArgs({ aiModel: "other/model" }), "signer is not registered", "claim_lab");
+await expectRejected("a response hash that is not 64 hex characters", members.B, await labArgs({ responseHash: "HbA1c 5.4%" }), "64 lowercase hex", "claim_lab");
+await expectRejected("rule_met with no test found", members.B, await labArgs({ testFound: false }), "rule_met needs test_found", "claim_lab");
 await mustCall(root, poolId, "remove_signer", { signer: testAi.address });
-await expectRejected("a signer that the insurer removed", claimer, await claimArgs({}), "signer is not registered");
+await expectRejected("a signer that the insurer removed", members.B, await labArgs(), "signer is not registered", "claim_lab");
 
 // 3. Real claims. The wearable service decides each one in code and signs the result. No model sees the rows.
 const memberData = await loadMembers();
@@ -203,13 +204,53 @@ for (const { name, baselineRows, claimRows } of memberData) {
   check(`${name}: ${expected.decision === "paid" ? "received 10 tUSD" : "received no tUSD"}`, received === (expected.decision === "paid" ? REBATE : 0n), `${received}`);
 }
 
-// 4. Rejections that need a recorded claim.
+// 4. Real lab claims. The attested model reads a synthetic report. Code applies the rule. Only hashes and the result go on-chain.
+const ai = createNearAi({ apiKey: process.env.NEARAI_CLOUD_API_KEY, model: MODEL });
+const signers = await ai.attest();
+check("the NEAR AI attestation passes", signers.length > 0, `${signers.length} model signers`);
+for (const signer of signers) await mustCall(root, poolId, "register_signer", { signer });
+
+const LAB_CLAIMS = [
+  ["A", "pass-percent-better"],
+  ["B", "fail-mmol"],
+];
+let firstLab;
+for (const [name, sampleId] of LAB_CLAIMS) {
+  const sample = LAB_SAMPLES.find(({ id }) => id === sampleId);
+  const member = members[name];
+  const started = Date.now();
+  const image = { type: "image/png", bytes: readFileSync(new URL(`../web/public/lab-samples/${sampleId}.png`, import.meta.url)) };
+  const read = await readLabReport({ ai, signers, model: MODEL, image, today: LAB_TODAY });
+  const args = await labClaimArgs({ contract: poolId, member: member.accountId, year: LAB_YEAR, read, signMessage: claims.signMessage });
+  firstLab ??= { member, args };
+  const before = await tusdOf(member.accountId);
+  const { hash, failure } = await call(member, poolId, "claim_lab", args);
+  links[`${name} lab`] = `${EXPLORER}/${hash}`;
+  check(`${name}: the lab claim for ${sampleId} succeeds`, !failure, failure ?? `tx ${hash}, ${((Date.now() - started) / 1000).toFixed(1)} s`);
+  await sleep(5000);
+
+  const record = await view(poolId, "get_claim", { member: member.accountId, week: `lab-${LAB_YEAR}` });
+  const paid = sample.expected.rule_met;
+  check(`${name}: the lab result on-chain matches the sample`, record?.test_found === sample.expected.test_found && record?.rule_met === paid, JSON.stringify(read.result));
+  // The record has these fields only: hashes and booleans, and no HbA1c value or date.
+  const fields = Object.entries(record ?? {}).filter(([, value]) => value !== null).map(([key]) => key).sort().join();
+  check(
+    `${name}: the lab record holds the hashes and the result only`,
+    fields === "outcome,request_hash,response_hash,rule_met,test_found" && record.request_hash === read.requestHash && record.response_hash === read.responseHash,
+    fields,
+  );
+  check(`${name}: ${paid ? "received 10 tUSD for the lab claim" : "received no tUSD for the lab claim"}`, (await tusdOf(member.accountId)) - before === (paid ? REBATE : 0n));
+}
+
+// 5. Rejections that need a recorded claim.
+await expectRejected("a second lab claim for the same year", firstLab.member, firstLab.args, "already claimed", "claim_lab");
 await expectRejected("a second claim for the same week", firstClaim.member, firstClaim.args, "already claimed", "claim_wearable");
 await expectRejected("a held claim resolved by a member", members.C, { member: members.C.accountId, week: WEEK, approve: true }, "Only the insurer", "resolve_held");
 
 const totals = await view(poolId, "get_totals");
-check("totals on-chain", totals.paid === 1 && totals.not_paid === 1 && totals.held === 1, JSON.stringify(totals));
-check("the pool paid one rebate", BigInt(await view(poolId, "get_balance")) === POOL_FUNDS - REBATE && (await tusdOf(poolId)) === POOL_FUNDS - REBATE);
+check("totals on-chain", totals.paid === 2 && totals.not_paid === 2 && totals.held === 1, JSON.stringify(totals));
+const spent = 2n * REBATE;
+check("the pool paid two rebates", BigInt(await view(poolId, "get_balance")) === POOL_FUNDS - spent && (await tusdOf(poolId)) === POOL_FUNDS - spent);
 
 // The web app reads this pool and these members.
 if (!failures) {
@@ -219,5 +260,5 @@ if (!failures) {
 
 console.log(`\nToken: ${tokenId}\nPool: ${poolId}`);
 for (const [name, link] of Object.entries(links)) console.log(`${name}: ${link}`);
-console.log(failures ? `\nRESULT: FAILED (${failures} failures)` : "\nRESULT: testnet payouts match A, B and C");
+console.log(failures ? `\nRESULT: FAILED (${failures} failures)` : "\nRESULT: testnet payouts match A, B and C, and the lab claims");
 process.exit(failures ? 1 : 0);

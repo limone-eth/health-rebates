@@ -1,9 +1,10 @@
 //! The rebate pool. It takes two kinds of claim:
 //! - `claim_wearable`: the wearable service applies the rule in plain code and signs
 //!   (contract, member, week, request_hash, days_met, pattern_matches_owner). No model decides it.
-//! - `claim_lab`: the demo service signs (contract, member, year, request_hash) for the request that it built,
-//!   with the lab rule in the prompt. A registered NEAR AI signer signs (model, request_hash, response_hash):
-//!   the TEE model read the report and gave this answer. The answer holds `test_found` and `rule_met` only.
+//! - `claim_lab`: a registered NEAR AI signer signs (model, request_hash, response_hash): the TEE model read
+//!   the report and gave this answer, which holds the HbA1c values. The answer does not go on-chain.
+//!   The demo service applies the lab rule in plain code to that answer and signs
+//!   (contract, member, year, request_hash, response_hash, test_found, rule_met). No model decides it.
 //!
 //! The pool pays the rebate in tUSD, a NEP-141 test token, with `ft_transfer`. A real insurer pays in USDC.
 //! The insurer funds it with `ft_transfer_call`. If a payout fails, the claim goes back to Held.
@@ -12,11 +13,11 @@
 //! Arguments of a testnet transaction are public: the results are public, under the member's account. No report goes on-chain.
 
 use near_sdk::json_types::U128;
-use near_sdk::serde_json::{self, json, Value};
+use near_sdk::serde_json::json;
 use near_sdk::store::{LookupMap, LookupSet};
 use near_sdk::{env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue};
 
-use crate::{recover_signer, sha256_hex};
+use crate::recover_signer;
 
 /// Kept in the pool for storage of new claim records.
 const STORAGE_RESERVE: NearToken = NearToken::from_millinear(100);
@@ -52,16 +53,34 @@ pub struct ClaimRecord {
     /// Lab claims only.
     pub test_found: Option<bool>,
     pub rule_met: Option<bool>,
+    /// Lab claims only: the hash of the signed answer that the member keeps.
+    pub response_hash: Option<String>,
     pub outcome: Outcome,
     pub request_hash: String,
 }
 
 impl ClaimRecord {
     fn wearable(days_met: u8, pattern_matches_owner: bool, request_hash: String) -> Self {
-        Self { days_met: Some(days_met), pattern_matches_owner: Some(pattern_matches_owner), test_found: None, rule_met: None, outcome: Outcome::NotPaid, request_hash }
+        Self {
+            days_met: Some(days_met),
+            pattern_matches_owner: Some(pattern_matches_owner),
+            test_found: None,
+            rule_met: None,
+            response_hash: None,
+            outcome: Outcome::NotPaid,
+            request_hash,
+        }
     }
-    fn lab(test_found: bool, rule_met: bool, request_hash: String) -> Self {
-        Self { days_met: None, pattern_matches_owner: None, test_found: Some(test_found), rule_met: Some(rule_met), outcome: Outcome::NotPaid, request_hash }
+    fn lab(test_found: bool, rule_met: bool, request_hash: String, response_hash: String) -> Self {
+        Self {
+            days_met: None,
+            pattern_matches_owner: None,
+            test_found: Some(test_found),
+            rule_met: Some(rule_met),
+            response_hash: Some(response_hash),
+            outcome: Outcome::NotPaid,
+            request_hash,
+        }
     }
 }
 
@@ -132,58 +151,23 @@ fn lab_period(year: u16) -> String {
     format!("lab-{year}")
 }
 
-/// The exact text that the demo service signs for a lab request that it built.
-fn lab_request_text(contract: &AccountId, member: &AccountId, year: u16, request_hash: &str) -> String {
-    format!("rebate-lab:{contract}:{member}:{year}:{request_hash}")
+/// The exact text that the demo service signs for a lab result that its own code decided from the model's answer.
+fn lab_result_text(
+    contract: &AccountId,
+    member: &AccountId,
+    year: u16,
+    request_hash: &str,
+    response_hash: &str,
+    test_found: bool,
+    rule_met: bool,
+) -> String {
+    format!("rebate-lab:{contract}:{member}:{year}:{request_hash}:{response_hash}:{test_found}:{rule_met}")
 }
 
 /// The exact text that the wearable service signs for a result that its own code decided.
 /// The prefix is different, so a request signature is not also a result signature.
 fn result_text(contract: &AccountId, member: &AccountId, week: &str, request_hash: &str, days_met: u8, pattern: bool) -> String {
     format!("rebate-result:{contract}:{member}:{week}:{request_hash}:{days_met}:{pattern}")
-}
-
-/// Rejects a field that is not in `known`, unless its value is null.
-fn only_known_fields(value: &Value, known: &[&str]) -> Result<(), &'static str> {
-    let fields = value.as_object().ok_or("Response has a bad shape")?;
-    if fields.iter().any(|(key, field)| !field.is_null() && !known.contains(&key.as_str())) {
-        return Err("Response holds an unknown field");
-    }
-    Ok(())
-}
-
-/// Reads the result from the signed response. Accepts the result only, with no reasoning text.
-fn parse_response(body: &str, model: &str) -> Result<(bool, bool), &'static str> {
-    let body: Value = serde_json::from_str(body).map_err(|_| "Response is not JSON")?;
-    if body["model"].as_str() != Some(model) {
-        return Err("Response is from another model");
-    }
-    let choices = body["choices"].as_array().ok_or("Response has no choices")?;
-    let [choice] = choices.as_slice() else {
-        return Err("Response must have one choice");
-    };
-    let message = &choice["message"];
-    // Any other field that holds a value can repeat health data, and the whole body goes on-chain.
-    only_known_fields(&body, &["id", "object", "choices", "model", "created", "usage"])?;
-    only_known_fields(choice, &["index", "message", "finish_reason", "logprobs", "matched_stop"])?;
-    for key in ["reasoning_content", "reasoning"] {
-        if !message[key].is_null() {
-            return Err("Response holds reasoning text");
-        }
-    }
-    only_known_fields(message, &["role", "content"])?;
-    let content = message["content"].as_str().ok_or("Response has no content")?;
-    let result: Value = serde_json::from_str(content).map_err(|_| "Result is not JSON")?;
-    let fields = result.as_object().ok_or("Result is not an object")?;
-    if fields.len() != 2 {
-        return Err("Result must hold test_found and rule_met only");
-    }
-    let test_found = fields.get("test_found").and_then(Value::as_bool).ok_or("Bad test_found")?;
-    let rule_met = fields.get("rule_met").and_then(Value::as_bool).ok_or("Bad rule_met")?;
-    if rule_met && !test_found {
-        return Err("rule_met needs test_found");
-    }
-    Ok((test_found, rule_met))
 }
 
 fn fail(message: &str) -> ! {
@@ -251,12 +235,16 @@ impl RebatePool {
         self.signers.remove(&parse_hex::<20>(&signer).unwrap_or_else(|| fail("Bad signer")));
     }
 
-    /// The caller is the member. Pays if the model found a test that meets the lab rule. One lab claim for each year.
+    /// The caller is the member. Pays if the service's code found a recent test that meets the lab rule
+    /// in the answer that a registered NEAR AI signer signed. One lab claim for each year.
+    #[allow(clippy::too_many_arguments)]
     pub fn claim_lab(
         &mut self,
         year: u16,
         request_hash: String,
-        response_body: String,
+        response_hash: String,
+        test_found: bool,
+        rule_met: bool,
         ai_signature: String,
         service_signature: String,
     ) -> Outcome {
@@ -264,24 +252,25 @@ impl RebatePool {
         let period = lab_period(year);
         require!(!self.claims.contains_key(&claim_key(&member, &period)), "This year's lab rebate is already claimed");
         require!(is_sha256_hex(&request_hash), "request_hash must be 64 lowercase hex characters");
-
-        // The service built the request with the lab rule, so the member cannot send another prompt.
-        let service: [u8; 65] = parse_hex(&service_signature).unwrap_or_else(|| fail("Bad service signature"));
-        let text = lab_request_text(&env::current_account_id(), &member, year, &request_hash);
-        require!(
-            recover_signer(text.as_bytes(), &service) == Some(self.wearable_signer),
-            "The service did not sign this lab request"
-        );
+        require!(is_sha256_hex(&response_hash), "response_hash must be 64 lowercase hex characters");
+        require!(test_found || !rule_met, "rule_met needs test_found");
 
         // The text holds the published model, so a signature for another model does not recover a registered signer.
         let ai: [u8; 65] = parse_hex(&ai_signature).unwrap_or_else(|| fail("Bad NEAR AI signature"));
-        let text = format!("{}:{request_hash}:{}", self.model, sha256_hex(response_body.as_bytes()));
+        let text = format!("{}:{request_hash}:{response_hash}", self.model);
         let signer = recover_signer(text.as_bytes(), &ai).unwrap_or_else(|| fail("Bad NEAR AI signature"));
         require!(self.signers.contains(&signer), "The NEAR AI signer is not registered");
 
-        let (test_found, rule_met) = parse_response(&response_body, &self.model).unwrap_or_else(|message| fail(message));
+        // The service built the request and applied the rule to this answer. The contract cannot read the answer.
+        let service: [u8; 65] = parse_hex(&service_signature).unwrap_or_else(|| fail("Bad service signature"));
+        let text = lab_result_text(&env::current_account_id(), &member, year, &request_hash, &response_hash, test_found, rule_met);
+        require!(
+            recover_signer(text.as_bytes(), &service) == Some(self.wearable_signer),
+            "The service did not sign this lab result"
+        );
+
         let outcome = if rule_met { Outcome::Paid } else { Outcome::NotPaid };
-        self.settle(member, period, ClaimRecord::lab(test_found, rule_met, request_hash), outcome)
+        self.settle(member, period, ClaimRecord::lab(test_found, rule_met, request_hash, response_hash), outcome)
     }
 
     /// The caller is the member. The wearable service applied the rule in plain code and signed the result.
@@ -443,6 +432,7 @@ mod tests {
     use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
     use near_sdk::testing_env;
     use near_sdk::mock::MockAction;
+    use near_sdk::serde_json::{self, Value};
 
     const MODEL: &str = "test/model";
     const WEEK: &str = "2026-11-02";
@@ -512,44 +502,52 @@ mod tests {
             .count()
     }
 
-    fn body(content: &str) -> String {
-        serde_json::json!({ "model": MODEL, "choices": [{ "message": { "role": "assistant", "content": content } }] })
-            .to_string()
-    }
-    fn lab(test_found: bool, rule_met: bool) -> String {
-        body(&format!(r#"{{"test_found":{test_found},"rule_met":{rule_met}}}"#))
-    }
     const YEAR: u16 = 2026;
     const LAB: &str = "lab-2026";
+    const ANSWER: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
-    fn ai_sign(signer: &SigningKey, model: &str, response: &str) -> String {
-        hex(&sign(signer, &format!("{model}:{HASH}:{}", sha256_hex(response.as_bytes()))))
+    fn ai_sign(signer: &SigningKey, model: &str, response_hash: &str) -> String {
+        hex(&sign(signer, &format!("{model}:{HASH}:{response_hash}")))
     }
-    fn service_sign(signer: &SigningKey, member: &str) -> String {
-        hex(&sign(signer, &lab_request_text(&account("pool.testnet"), &account(member), YEAR, HASH)))
+    fn service_sign(signer: &SigningKey, member: &str, test_found: bool, rule_met: bool) -> String {
+        hex(&sign(signer, &lab_result_text(&account("pool.testnet"), &account(member), YEAR, HASH, ANSWER, test_found, rule_met)))
     }
 
     /// A lab claim by `member`, with good signatures.
-    fn claim_lab(pool: &mut RebatePool, member: &str, response: &str) -> Outcome {
+    fn claim_lab(pool: &mut RebatePool, member: &str, test_found: bool, rule_met: bool) -> Outcome {
         context(member, NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.to_string(), ai_sign(&ai_key(), MODEL, response), service_sign(&wearable_key(), member))
+        pool.claim_lab(
+            YEAR,
+            HASH.to_string(),
+            ANSWER.to_string(),
+            test_found,
+            rule_met,
+            ai_sign(&ai_key(), MODEL, ANSWER),
+            service_sign(&wearable_key(), member, test_found, rule_met),
+        )
+    }
+
+    /// A lab claim by a.testnet with the given signatures, which claims a paid result.
+    fn claim_lab_signed(pool: &mut RebatePool, ai_signature: String, service_signature: String) -> Outcome {
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim_lab(YEAR, HASH.to_string(), ANSWER.to_string(), true, true, ai_signature, service_signature)
     }
 
     #[test]
     fn a_lab_claim_pays_a_member_who_meets_the_lab_rule() {
         let mut pool = pool();
-        assert_eq!(claim_lab(&mut pool, "a.testnet", &lab(true, true)), Outcome::Paid);
+        assert_eq!(claim_lab(&mut pool, "a.testnet", true, true), Outcome::Paid);
         assert_eq!(payouts("a.testnet"), 1);
         let record = pool.get_claim(account("a.testnet"), LAB.to_string()).unwrap();
-        assert_eq!(record, ClaimRecord { outcome: Outcome::Paid, ..ClaimRecord::lab(true, true, HASH.to_string()) });
+        assert_eq!(record, ClaimRecord { outcome: Outcome::Paid, ..ClaimRecord::lab(true, true, HASH.to_string(), ANSWER.to_string()) });
         assert_eq!(pool.get_totals(), Totals { paid: 1, ..Totals::default() });
     }
 
     #[test]
     fn a_lab_claim_does_not_pay_a_missed_rule_or_a_missing_test() {
         let mut pool = pool();
-        assert_eq!(claim_lab(&mut pool, "b.testnet", &lab(true, false)), Outcome::NotPaid);
-        assert_eq!(claim_lab(&mut pool, "c.testnet", &lab(false, false)), Outcome::NotPaid);
+        assert_eq!(claim_lab(&mut pool, "b.testnet", true, false), Outcome::NotPaid);
+        assert_eq!(claim_lab(&mut pool, "c.testnet", false, false), Outcome::NotPaid);
         assert!(get_created_receipts().is_empty());
         assert_eq!(pool.get_totals(), Totals { not_paid: 2, ..Totals::default() });
     }
@@ -559,7 +557,7 @@ mod tests {
     fn a_lab_claim_and_a_wearable_claim_are_separate() {
         let mut pool = pool();
         assert_eq!(claim_wearable(&mut pool, "a.testnet", 6, true), Outcome::Paid);
-        assert_eq!(claim_lab(&mut pool, "a.testnet", &lab(true, true)), Outcome::Paid);
+        assert_eq!(claim_lab(&mut pool, "a.testnet", true, true), Outcome::Paid);
         assert_eq!(pool.get_claim(account("a.testnet"), WEEK.to_string()).unwrap().days_met, Some(6));
         assert_eq!(pool.get_claim(account("a.testnet"), LAB.to_string()).unwrap().rule_met, Some(true));
     }
@@ -568,46 +566,47 @@ mod tests {
     #[should_panic(expected = "already claimed")]
     fn a_lab_claim_rejects_a_second_claim_for_the_same_year() {
         let mut pool = pool();
-        claim_lab(&mut pool, "a.testnet", &lab(true, true));
-        claim_lab(&mut pool, "a.testnet", &lab(true, true));
+        claim_lab(&mut pool, "a.testnet", true, true);
+        claim_lab(&mut pool, "a.testnet", true, true);
     }
 
     #[test]
-    #[should_panic(expected = "service did not sign this lab request")]
+    #[should_panic(expected = "service did not sign this lab result")]
     fn a_lab_claim_rejects_a_service_signature_from_another_key() {
         let mut pool = pool();
-        let response = lab(true, true);
-        context("a.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.clone(), ai_sign(&ai_key(), MODEL, &response), service_sign(&key(9), "a.testnet"));
+        claim_lab_signed(&mut pool, ai_sign(&ai_key(), MODEL, ANSWER), service_sign(&key(9), "a.testnet", true, true));
     }
 
-    /// B cannot use the request that the service built for A.
+    /// The member cannot change a not-paid result to paid.
     #[test]
-    #[should_panic(expected = "service did not sign this lab request")]
+    #[should_panic(expected = "service did not sign this lab result")]
+    fn a_lab_claim_rejects_a_changed_result() {
+        let mut pool = pool();
+        claim_lab_signed(&mut pool, ai_sign(&ai_key(), MODEL, ANSWER), service_sign(&wearable_key(), "a.testnet", true, false));
+    }
+
+    /// B cannot use the result that the service signed for A.
+    #[test]
+    #[should_panic(expected = "service did not sign this lab result")]
     fn a_lab_claim_rejects_a_service_signature_for_another_member() {
         let mut pool = pool();
-        let response = lab(true, true);
         context("b.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.clone(), ai_sign(&ai_key(), MODEL, &response), service_sign(&wearable_key(), "a.testnet"));
+        pool.claim_lab(YEAR, HASH.to_string(), ANSWER.to_string(), true, true, ai_sign(&ai_key(), MODEL, ANSWER), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
-    /// A wearable result signature is not a lab request signature.
+    /// A wearable result signature is not a lab result signature.
     #[test]
-    #[should_panic(expected = "service did not sign this lab request")]
+    #[should_panic(expected = "service did not sign this lab result")]
     fn a_lab_claim_rejects_a_wearable_result_signature() {
         let mut pool = pool();
-        let response = lab(true, true);
-        context("a.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.clone(), ai_sign(&ai_key(), MODEL, &response), result_sign(&wearable_key(), "a.testnet", 6, true));
+        claim_lab_signed(&mut pool, ai_sign(&ai_key(), MODEL, ANSWER), result_sign(&wearable_key(), "a.testnet", 6, true));
     }
 
     #[test]
     #[should_panic(expected = "signer is not registered")]
     fn a_lab_claim_rejects_a_near_ai_signer_that_is_not_registered() {
         let mut pool = pool();
-        let response = lab(true, true);
-        context("a.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.clone(), ai_sign(&key(9), MODEL, &response), service_sign(&wearable_key(), "a.testnet"));
+        claim_lab_signed(&mut pool, ai_sign(&key(9), MODEL, ANSWER), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     #[test]
@@ -615,16 +614,16 @@ mod tests {
     fn a_lab_claim_rejects_a_signer_after_the_insurer_removes_it() {
         let mut pool = pool();
         pool.remove_signer(hex(&address(&ai_key())));
-        claim_lab(&mut pool, "a.testnet", &lab(true, true));
+        claim_lab(&mut pool, "a.testnet", true, true);
     }
 
-    /// A signature for a changed body recovers another address, which is not registered.
+    /// A NEAR AI signature for another answer recovers another address, which is not registered.
     #[test]
     #[should_panic(expected = "signer is not registered")]
-    fn a_lab_claim_rejects_a_changed_response() {
+    fn a_lab_claim_rejects_a_near_ai_signature_for_another_answer() {
         let mut pool = pool();
-        context("b.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), lab(true, true), ai_sign(&ai_key(), MODEL, &lab(true, false)), service_sign(&wearable_key(), "b.testnet"));
+        let other = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
+        claim_lab_signed(&mut pool, ai_sign(&ai_key(), MODEL, other), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     /// The signature covers another model's name, so it does not recover the registered signer.
@@ -632,87 +631,30 @@ mod tests {
     #[should_panic(expected = "signer is not registered")]
     fn a_lab_claim_rejects_a_signature_for_a_model_that_the_insurer_did_not_publish() {
         let mut pool = pool();
-        let response = lab(true, true);
-        context("a.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, HASH.to_string(), response.clone(), ai_sign(&ai_key(), "other/model", &response), service_sign(&wearable_key(), "a.testnet"));
+        claim_lab_signed(&mut pool, ai_sign(&ai_key(), "other/model", ANSWER), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     #[test]
-    #[should_panic(expected = "Response is from another model")]
-    fn a_lab_claim_rejects_a_body_from_another_model() {
-        let mut pool = pool();
-        let response = serde_json::json!({ "model": "other/model", "choices": [{ "message": { "content": r#"{"test_found":true,"rule_met":true}"# } }] }).to_string();
-        claim_lab(&mut pool, "a.testnet", &response);
-    }
-
-    #[test]
-    #[should_panic(expected = "64 lowercase hex")]
+    #[should_panic(expected = "request_hash must be 64 lowercase hex")]
     fn a_lab_claim_rejects_a_request_hash_that_is_not_64_hex_characters() {
         let mut pool = pool();
-        let response = lab(true, true);
         context("a.testnet", NearToken::from_near(10));
-        pool.claim_lab(YEAR, "abc".to_string(), response.clone(), ai_sign(&ai_key(), MODEL, &response), service_sign(&wearable_key(), "a.testnet"));
+        pool.claim_lab(YEAR, "abc".to_string(), ANSWER.to_string(), true, true, ai_sign(&ai_key(), MODEL, ANSWER), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     #[test]
-    #[should_panic(expected = "reasoning text")]
-    fn a_lab_claim_rejects_a_body_with_reasoning_text() {
+    #[should_panic(expected = "response_hash must be 64 lowercase hex")]
+    fn a_lab_claim_rejects_a_response_hash_that_is_not_64_hex_characters() {
         let mut pool = pool();
-        let response = serde_json::json!({ "model": MODEL, "choices": [{ "message": {
-            "content": r#"{"test_found":true,"rule_met":true}"#,
-            "reasoning_content": "HbA1c was 5.4%",
-        } }] })
-        .to_string();
-        claim_lab(&mut pool, "a.testnet", &response);
-    }
-
-    #[test]
-    #[should_panic(expected = "unknown field")]
-    fn a_lab_claim_rejects_another_message_field_that_holds_text() {
-        let mut pool = pool();
-        let response = serde_json::json!({ "model": MODEL, "choices": [{ "message": {
-            "content": r#"{"test_found":true,"rule_met":true}"#,
-            "thinking": "HbA1c was 5.4%",
-        } }] })
-        .to_string();
-        claim_lab(&mut pool, "a.testnet", &response);
-    }
-
-    #[test]
-    #[should_panic(expected = "unknown field")]
-    fn a_lab_claim_rejects_an_unknown_top_level_field() {
-        let mut pool = pool();
-        let response = serde_json::json!({ "model": MODEL, "extra": "HbA1c was 5.4%", "choices": [{ "message": {
-            "content": r#"{"test_found":true,"rule_met":true}"#,
-        } }] })
-        .to_string();
-        claim_lab(&mut pool, "a.testnet", &response);
-    }
-
-    #[test]
-    fn a_lab_claim_accepts_a_null_optional_field() {
-        let mut pool = pool();
-        let response = serde_json::json!({ "model": MODEL, "system_fingerprint": null, "choices": [{ "message": {
-            "content": r#"{"test_found":true,"rule_met":true}"#,
-            "tool_calls": null,
-        } }] })
-        .to_string();
-        assert_eq!(claim_lab(&mut pool, "a.testnet", &response), Outcome::Paid);
-    }
-
-    /// An extra field could repeat the HbA1c value, and the body is public.
-    #[test]
-    #[should_panic(expected = "test_found and rule_met only")]
-    fn a_lab_claim_rejects_a_result_with_extra_fields() {
-        let mut pool = pool();
-        claim_lab(&mut pool, "a.testnet", &body(r#"{"test_found":true,"rule_met":true,"hba1c":5.4}"#));
+        context("a.testnet", NearToken::from_near(10));
+        pool.claim_lab(YEAR, HASH.to_string(), "HbA1c 5.4%".to_string(), true, true, ai_sign(&ai_key(), MODEL, ANSWER), service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     #[test]
     #[should_panic(expected = "rule_met needs test_found")]
     fn a_lab_claim_rejects_a_rule_met_with_no_test() {
         let mut pool = pool();
-        claim_lab(&mut pool, "a.testnet", &lab(false, true));
+        claim_lab(&mut pool, "a.testnet", false, true);
     }
 
     #[test]
@@ -868,13 +810,13 @@ mod tests {
         pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, result_sign(&wearable_key(), "a.testnet", 6, true));
     }
 
-    /// A lab request signature says "the service built this request", not "this is the result".
+    /// A lab result signature is not a wearable result signature.
     #[test]
     #[should_panic(expected = "wearable service did not sign this result")]
-    fn a_wearable_claim_rejects_a_lab_request_signature() {
+    fn a_wearable_claim_rejects_a_lab_result_signature() {
         let mut pool = pool();
         context("a.testnet", NearToken::from_near(10));
-        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, service_sign(&wearable_key(), "a.testnet"));
+        pool.claim_wearable(WEEK.to_string(), HASH.to_string(), 6, true, service_sign(&wearable_key(), "a.testnet", true, true));
     }
 
     #[test]
