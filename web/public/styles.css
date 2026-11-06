@@ -400,3 +400,4 @@ details.tech dd { font: 400 13px/1.5 var(--mono); overflow-wrap: anywhere; }
   .lab-panel h2 { font-size: 26px; }
   .lab-samples .btn { flex: 1 1 100%; }
 }
+.lab-row .fields { flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); }

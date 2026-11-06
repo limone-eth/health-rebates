@@ -493,7 +493,7 @@ function updateLabSteps() {
   if (holder) holder.innerHTML = labStepsHtml().replace(' class="steps enter"', ' class="steps"');
 }
 
-const testText = (test) => (test ? `${test.value} ${test.unit}, ${longDate(test.date)}` : "None");
+const testText = (test) => (test ? `${test.value}${test.unit === "%" ? "%" : ` ${test.unit}`}, ${longDate(test.date)}` : "None");
 
 function labResultHtml(lab) {
   const { member } = lab;
